@@ -637,5 +637,48 @@ ok:
   check("FIX-07: TraceStore 接受独立事件流", t.historyOf({ compId: "c", pin: "p" }).length > 0);
 }
 
+// M1: ProjectFile schema 校验 + 旧档迁移
+{
+  const { validateProjectFile } = await import("../src/project/validate.ts");
+  const { migrateLegacySaveFile, serializeProject } = await import("../src/project/migrate.ts");
+  const { PROJECT_SCHEMA_VERSION } = await import("../src/project/types.ts");
+
+  check("M1: ProjectFile schemaVersion=2", PROJECT_SCHEMA_VERSION === 2, "v=" + PROJECT_SCHEMA_VERSION);
+
+  // 旧 SaveFile 升级 — 必须可读，不丢元数据
+  const legacy = {
+    format: "z-biz-tool-cpu/1",
+    savedAt: new Date().toISOString(),
+    design: {
+      name: "MyReg",
+      root: {
+        comps: [
+          { id: "sw", type: "input", x: 0, y: 0, rot: 0, params: { bitWidth: 1, init: "0" }, name: "SW" },
+          { id: "ld", type: "output", x: 5, y: 0, rot: 0, params: { bitWidth: 1 }, name: "LD" },
+        ],
+        wires: [{ id: "w1", a: { comp: "sw", pin: "out" }, b: { comp: "ld", pin: "in" } }],
+      },
+      defs: [],
+    },
+  };
+  const imported = migrateLegacySaveFile(JSON.stringify(legacy));
+  check("M1: legacy SaveFile 升级到 ProjectFile 且含原始 design", !!(imported.project && imported.project.design.root.comps.length === 2));
+  check("M1: 升级后带 schemaVersion", imported.project?.schemaVersion === 2);
+  check("M1: 备份带 checksum", /^[0-9a-f]+$/.test(imported.backup.checksum), imported.backup.checksum);
+
+  // 损坏 JSON 不应污染用户数据
+  const bad = migrateLegacySaveFile("not-json");
+  check("M1: 损坏 legacy 不生成 ProjectFile", bad.project === undefined && bad.backup.status === "failed");
+
+  // 严格校验 v2 ProjectFile — 缺失字段必须报错
+  const r = validateProjectFile({ schemaVersion: 999, design: {} } as any);
+  check("M1: 错误 schemaVersion 阻断校验", !r.ok && r.issues.some((i) => /不支持的 schemaVersion/.test(i.msg)));
+
+  // 完整 v2 项目往返
+  const proj = imported.project!;
+  const ok = validateProjectFile(JSON.parse(serializeProject(proj)));
+  check("M1: ProjectFile 序列化往返一致", ok.ok && ok.project?.id === proj.id, ok.issues.map((i) => i.msg).join(";"));
+}
+
 console.log(`\n${failed === 0 ? "\x1b[32m" : "\x1b[31m"}内核自检：${passed} 通过 / ${failed} 失败\x1b[0m`);
 process.exit(failed === 0 ? 0 : 1);
