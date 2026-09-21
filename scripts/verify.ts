@@ -810,5 +810,88 @@ ok:
   check("IMP-08: WorkerBackend 类型可导出", typeof WorkerBackend === "function");
 }
 
+// IMP-10: 课程发布器 — validateCatalog + parseManifest + buildCatalog + build-curriculum
+{
+  const { validateCatalog, parseManifest, catalogHash } = await import("../src/courses/manifest.ts");
+  const { buildCatalog } = await import("../src/courses/buildCatalog.ts");
+  const { LEVELS } = await import("../src/challenges/levels.ts");
+  const { readFileSync } = await import("node:fs");
+  const { resolve, dirname } = await import("node:path");
+  const { fileURLToPath } = await import("node:url");
+  const __dirname = dirname(fileURLToPath(import.meta.url));
+
+  // catalogHash 确定性 + 不等于空
+  const fakeM: any = {
+    schemaVersion: 1,
+    catalogId: "test",
+    meta: { title: "t", description: "", authors: [], license: "", generator: "", generatedAt: "" },
+    knowledgeGraph: [],
+    prologues: [],
+    levels: [],
+    catalogVersion: "v1",
+    kernelVersion: "v1",
+    isaVersion: "v1",
+    hash: "",
+  };
+  fakeM.hash = catalogHash(fakeM);
+  check("IMP-10: catalogHash 计算并写入", typeof fakeM.hash === "string" && fakeM.hash.length > 0, fakeM.hash);
+  const again = catalogHash(fakeM);
+  check("IMP-10: catalogHash 确定性", again === fakeM.hash);
+
+  // 用真实 LEVELS build 一份最小 catalog — 应通过 validateCatalog
+  const meta = new Map();
+  let displayOrder = 1;
+  for (const lvl of LEVELS) {
+    meta.set(lvl.id, {
+      displayOrder: displayOrder++,
+      prerequisites: [],
+      objectives: [],
+      interfaceContract: {
+        pins: [{ id: "in", name: "IN", direction: "in" as const, width: 1, required: true }],
+        mutable: "all" as const,
+        requiredDefs: [],
+      },
+      publicTests: [{ id: lvl.id + "-p", name: "p", inputs: [], assertions: [{ kind: "noDiagnostic" as const }], maxTicks: 1 }],
+      validationCases: [{ id: lvl.id + "-v", name: "v", inputs: [], assertions: [{ kind: "noDiagnostic" as const }], maxTicks: 1 }],
+      hints: [{ level: 1 as const, body: "h" }],
+    });
+  }
+  const manifest = buildCatalog(LEVELS, meta, {
+    title: "Test", description: "d", authors: ["x"], license: "MIT", generator: "test",
+  });
+  check("IMP-10: buildCatalog 通过校验", manifest.levels.length === LEVELS.length);
+  const v = validateCatalog(manifest);
+  check("IMP-10: validateCatalog 通过 31 关 5 世界", v.ok, v.issues.map((i) => i.path).join(";"));
+
+  // 缺失测试台应被阻断
+  const bad: any = JSON.parse(JSON.stringify(manifest));
+  bad.levels[0].publicTests = [];
+  bad.levels[0].validationCases = [];
+  const vb = validateCatalog(bad);
+  check("IMP-10: 缺公共/验证用例被阻断", !vb.ok && vb.issues.some((i) => /publicTests|validationCases/.test(i.path)));
+
+  // 重复 ID 阻断
+  const dup: any = JSON.parse(JSON.stringify(manifest));
+  dup.levels[1].id = dup.levels[0].id;
+  const vd = validateCatalog(dup);
+  check("IMP-10: 重复 ID 阻断", !vd.ok && vd.issues.some((i) => /重复/.test(i.msg)));
+
+  // 知识图环阻断
+  const cyc: any = JSON.parse(JSON.stringify(manifest));
+  cyc.knowledgeGraph = [{ id: "a", description: "a", dependsOn: ["b"] }, { id: "b", description: "b", dependsOn: ["a"] }];
+  const vc = validateCatalog(cyc);
+  check("IMP-10: 知识图环阻断", !vc.ok && vc.issues.some((i) => /有环/.test(i.msg)));
+
+  // 解析 manifest.json（build-curriculum 产物）
+  const manifestPath = resolve(__dirname, "../dist-curriculum/manifest.json");
+  const raw = readFileSync(manifestPath, "utf8");
+  const parsed = parseManifest(raw);
+  check("IMP-10: parseManifest 读出 build-curriculum 产物", parsed.ok && parsed.manifest.levels.length === LEVELS.length);
+
+  // parseManifest 拒绝损坏 JSON
+  const bad1 = parseManifest("{not-json");
+  check("IMP-10: parseManifest 拒绝非 JSON", !bad1.ok && bad1.errors.length > 0);
+}
+
 console.log(`\n${failed === 0 ? "\x1b[32m" : "\x1b[31m"}内核自检：${passed} 通过 / ${failed} 失败\x1b[0m`);
 process.exit(failed === 0 ? 0 : 1);
