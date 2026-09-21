@@ -41,6 +41,11 @@ export class Simulator {
   private prevClk: number[] = [];
   private reported = new Set<string>();
 
+  // FIX-03: 阻断性编译错误会让仿真无意义地继续推进；构造时若存在 level="error"
+  // 的条目，则把 Simulator 置入 COMPILE_ERROR 态，step/run 全部无效并返回 false，
+  // 同时把诊断注入 logs 便于 UI 显示。已存在的 reset/setInput 仍然可用以便校正。
+  hasBlockingError = false;
+
   constructor(design: Design, circuit: Circuit) {
     this.design = design;
     this.circuit = circuit;
@@ -48,7 +53,51 @@ export class Simulator {
     this.inq = new Uint8Array(this.nl.comps.length);
     this.ctxs = new Array(this.nl.comps.length);
     this.prevClk = new Array(this.nl.comps.length).fill(0);
+    this.hasBlockingError = this.nl.errors.some((e) => e.level === "error");
+    if (this.hasBlockingError) {
+      for (const e of this.nl.errors) {
+        if (e.level === "error") this.logs.push({ time: 0, comp: e.comps[0] ?? "@compile", level: "error", msg: e.msg });
+      }
+    }
     this.reset();
+  }
+
+  /** FIX-03: 阻断性编译错误时 step 立即返回 false，避免假装仿真成功 */
+  step(): boolean {
+    if (this.hasBlockingError) return false;
+    this.time++;
+    this.setClockSources(true);
+    this.settle();
+    const fired: number[] = [];
+    this.nl.comps.forEach((comp, ci) => {
+      if (comp.boundary || !comp.seq || comp.clkPin < 0) return;
+      const v = this.clkValue(ci);
+      if (v && !this.prevClk[ci]) fired.push(ci);
+    });
+    for (const ci of fired) {
+      const comp = this.nl.comps[ci];
+      try {
+        comp.def.onRise!(this.ctxOf(ci));
+      } catch (e) {
+        if (!this.reported.has(comp.id)) {
+          this.reported.add(comp.id);
+          this.log(comp.id, `${comp.def.label}: ${(e as Error).message}`, "error");
+        }
+      }
+    }
+    this.settle();
+    this.setClockSources(false);
+    this.settle();
+    this.nl.comps.forEach((_, ci) => {
+      this.prevClk[ci] = this.clkValue(ci);
+    });
+    return true;
+  }
+
+  run(steps: number): boolean {
+    if (this.hasBlockingError) return false;
+    for (let i = 0; i < steps; i++) this.step();
+    return true;
   }
 
   get errors() {
@@ -277,40 +326,6 @@ export class Simulator {
       const groupHigh = (this.time - 1) % divide === 0;
       comp.state.hi = highPhase && groupHigh ? 1 : 0;
     });
-  }
-
-  /** 推进一个完整时钟周期 */
-  step() {
-    this.time++;
-    this.setClockSources(true);
-    this.settle();
-    const fired: number[] = [];
-    this.nl.comps.forEach((comp, ci) => {
-      if (comp.boundary || !comp.seq || comp.clkPin < 0) return;
-      const v = this.clkValue(ci);
-      if (v && !this.prevClk[ci]) fired.push(ci);
-    });
-    for (const ci of fired) {
-      const comp = this.nl.comps[ci];
-      try {
-        comp.def.onRise!(this.ctxOf(ci));
-      } catch (e) {
-        if (!this.reported.has(comp.id)) {
-          this.reported.add(comp.id);
-          this.log(comp.id, `${comp.def.label}: ${(e as Error).message}`, "error");
-        }
-      }
-    }
-    this.settle();
-    this.setClockSources(false);
-    this.settle();
-    this.nl.comps.forEach((_, ci) => {
-      this.prevClk[ci] = this.clkValue(ci);
-    });
-  }
-
-  run(steps: number) {
-    for (let i = 0; i < steps; i++) this.step();
   }
 
   /** 手动设置输入开关 / 按钮 / 手动时钟源 */

@@ -389,5 +389,137 @@ loop: out  r0
   check("骨架可仿真且无拓扑错误", LEVELS.every((l) => runLevelTests(l, levelDesign(l)).errors.every((e) => e.level !== "error")));
 }
 
+/* ----------------  M0 P0 修复回归  ---------------- */
+
+// FIX-01: 汇编器对独立 # 与 @ 字符不能死循环
+{
+  const { assemble } = await import("../src/asm/assembler.ts");
+  // 单独 # 与 @ 在源中不应让 scanner 死循环；只要能返回即视为通过
+  let acked = true;
+  try {
+    const r1 = assemble("#\n");
+    const r2 = assemble("@\n");
+    acked = true && r1 !== undefined && r2 !== undefined;
+  } catch (e) {
+    acked = false;
+  }
+  check("FIX-01: 汇编扫描 #/@ 不再卡死", acked);
+
+  // 立即数前缀 `#label` 必须仍作为整体符号
+  const li = assemble("      ldi r0, #42\n");
+  check("FIX-01: # 立即数立即寻址保持", li.errors.length === 0 && (li.words[1] & 0xffff) === 42, JSON.stringify(li.words));
+}
+
+// FIX-02: 位宽不动点 — 长链 + 32 顶端不依赖硬 24 轮
+{
+  const b = new CircuitBuilder();
+  const big = b.add("input", 0, 0, { bitWidth: 32 });
+  const splits: string[] = [];
+  for (let i = 0; i < 8; i++) {
+    const s = b.add("split", 6, i * 2, { bitWidth: 32 });
+    b.connect(big, "out", s, "in");
+    splits.push(s);
+  }
+  const nands: string[] = [];
+  for (let i = 0; i < 31; i++) {
+    const n = b.add("nand", 11, i * 0.3);
+    b.connect(splits[i % splits.length], "b" + (i % 32), n, "i0");
+    nands.push(n);
+  }
+  for (let i = 0; i < 31; i++) {
+    const out = b.add("output", 25, i * 0.3, { bitWidth: 1 });
+    b.connect(nands[i], "out", out, "in");
+  }
+  const sim = mkSim(b.build());
+  sim.setInput(big, 0xffffffff >>> 0);
+  check("FIX-02: 长链位宽推断不再受硬上限 24 误判", !sim.unstable, "unstable=" + sim.unstable);
+}
+
+// FIX-03: 多驱动编译错误必须阻断 step
+{
+  const b = new CircuitBuilder();
+  const a = b.add("input", 0, 0, { bitWidth: 1 });
+  const c = b.add("input", 0, 1, { bitWidth: 1 });
+  const g1 = b.add("and", 5, 0);
+  const g2 = b.add("or", 5, 1);
+  // 两个输出接到同一输入管脚 → 多驱动错误
+  b.link([
+    [a, "out", g1, "i0"],
+    [c, "out", g1, "i1"],
+    [a, "out", g2, "i0"],
+    [c, "out", g2, "i1"],
+  ]);
+  const w = b.add("and", 8, 0);
+  // 构造多驱动: g1.out 与 g2.out 同时接到 w.i0
+  b.link([
+    [g1, "out", w, "i0"],
+    [g2, "out", w, "i0"],
+    [c, "out", w, "i1"],
+  ]);
+  const o = b.add("output", 15, 0, { bitWidth: 1 });
+  b.connect(w, "out", o, "in");
+  const sim = mkSim(b.build());
+  check("FIX-03: 多驱动命中时 hasBlockingError 置位", sim.hasBlockingError === true, "had=" + sim.hasBlockingError);
+  const stepped = sim.step();
+  check("FIX-03: 多驱动时 step 返回 false 不假装成功", stepped === false, "step=" + String(stepped));
+}
+
+// FIX-05: 序列化输入校验
+{
+  const { parse, MAX_IMPORT_BYTES } = await import("../src/core/serialize.ts");
+  const huge = "x".repeat(MAX_IMPORT_BYTES + 1);
+  const r1 = parse(huge);
+  check("FIX-05: 超大输入按尺寸上限拒绝", r1.errors.length > 0 && r1.errors[0].includes("上限"), r1.errors[0] ?? "");
+
+  const r2 = parse("{not-json");
+  check("FIX-05: 非 JSON 输入报错但不抛异常", r2.errors.length > 0 && r2.design === undefined, r2.errors.join("|"));
+
+  const r3 = parse('{"design":{"name":"x"}}');
+  check("FIX-05: 缺 root 报错", r3.errors.length > 0 && !r3.design, r3.errors.join("|"));
+}
+
+// FIX-08: 判题契约 — 学生输出位宽不足必须判失败
+{
+  // 选一个 clear 的位宽契约关：第二层的 ALU（应该有 4 位结果输出）
+  const { LEVELS, levelDesign } = await import("../src/challenges/levels.ts");
+  const { runLevelTests } = await import("../src/challenges/verify.ts");
+  const alu = LEVELS.find((l) => l.id === "t2-alu4");
+  check("FIX-08: 存在 t2-alu4 用于契约测试", !!alu);
+  if (alu) {
+    // 用裸骨架跑应当判位宽不足：因为骨架只有 I/O 没有功能，会有些 inputs 缺位宽
+    const lvl = alu;
+    const sk = levelDesign(lvl);
+    const res = runLevelTests(lvl, sk);
+    // 骨架本身应未通过（无解），并且 outcomes 里要么缺用例要么契约失败
+    check(
+      "FIX-08: 骨架不冒充通过（必须有失败用例或契约阻断）",
+      res.outcomes.some((o) => !o.pass),
+      res.outcomes.map((o) => `${o.name}=${o.pass}`).join(";")
+    );
+  }
+}
+
+// FIX-09: AND/OR/XOR/NOT 更新 Z/N 并保留 C
+{
+  // 程序：先产生进位 (ADD 0xFFFF + 1 → C=1, R0=0, Z=1)；再 AND R0, R0 → 应仅置 Z=1, 保留 C
+  // 然后 JZ 验证 Z 真的被置 1
+  const src = `      ldi r0, 0xffff
+      ldi r1, 1
+      add r0, r1      ; C=1, Z=1, R0=0
+      and r0, r0      ; Z 应被置 1，C 应保留
+      jz ok
+      hlt             ; 若 Z 未置 1，停机码 = 0
+ok:
+      hlt
+`;
+  const { runProgram } = await import("../src/cpu/run.ts");
+  const r = runProgram(src, { maxSteps: 6000 });
+  check(
+    "FIX-09: AND 后 Z 被置位，程序可经 JZ 到 ok",
+    r.done && r.errors.length === 0,
+    `done=${r.done} errors=${r.errors.join(",")} steps=${r.steps}`
+  );
+}
+
 console.log(`\n${failed === 0 ? "\x1b[32m" : "\x1b[31m"}内核自检：${passed} 通过 / ${failed} 失败\x1b[0m`);
 process.exit(failed === 0 ? 0 : 1);

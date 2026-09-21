@@ -1,5 +1,5 @@
 import { totalCost } from "../core/custom.ts";
-import { parseWordToken } from "../core/registry.ts";
+import { baseDef, parseWordToken } from "../core/registry.ts";
 import { Simulator } from "../core/sim.ts";
 import type { SimError } from "../core/netlist.ts";
 import type { CompInstance, Design } from "../core/types.ts";
@@ -78,11 +78,67 @@ function phasesOf(test: LevelTest): TestPhase[] {
   return out;
 }
 
+/** FIX-08: 从骨架电路取出每个 I/O 的契约位宽，禁止学生缩小输出位宽后绕过。 */
+function contractBitWidths(level: Level): Map<string, number> {
+  const map = new Map<string, number>();
+  if (typeof level.skeleton !== "function") return map;
+  const sk = level.skeleton();
+  for (const c of sk.comps) {
+    if (!c.name) continue;
+    const w = Number(c.params?.bitWidth) || 1;
+    map.set(c.name, w);
+    map.set("in-" + c.name, w);
+    map.set("out-" + c.name, w);
+  }
+  return map;
+}
+
+/** FIX-08: 递归展开学生用到的所有基础元件，校验是否在关卡白名单内。 */
+function collectTransitiveTypes(design: Design, maxDepth = 6, visited = new Set<string>(), acc = new Set<string>()): Set<string> {
+  for (const c of design.root.comps) {
+    acc.add(c.type);
+    if (c.type.startsWith("custom:") && !visited.has(c.type)) {
+      visited.add(c.type);
+      const def = design.defs.find((d) => "custom:" + d.id === c.type);
+      if (def) collectTransitiveTypes({ ...design, root: def.circuit }, maxDepth, visited, acc);
+    }
+  }
+  for (const d of design.defs) {
+    for (const c of d.circuit.comps) {
+      acc.add(c.type);
+    }
+  }
+  return acc;
+}
+
 export function runLevelTests(level: Level, design: Design): LevelResult {
   const outcomes: TestOutcome[] = [];
   const notes: string[] = [];
   let sim0: Simulator | undefined;
   let unstable = false;
+
+  // FIX-08: 预先检查契约：白名单 + 骨架 I/O 位宽
+  const contract = contractBitWidths(level);
+  const allowed = new Set(level.available ?? []);
+  const usedTypes = collectTransitiveTypes(design);
+  const forbiddenUsed: string[] = [];
+  for (const t of usedTypes) {
+    if (t === "input" || t === "output" || t === "clock") continue;
+    const base = baseDef(t);
+    if (!base) continue; // 子电路或自定义允许，但需通过后续结构校验
+    // 关卡白名单中显式列出的允许通过；allowIncludes 子电路
+    if (allowed.has(t) || (level.available ?? []).includes("custom")) continue;
+    if (allowed.size === 0) continue; // 空白名单视为不限制基础元件
+    forbiddenUsed.push(t);
+  }
+  if (forbiddenUsed.length) {
+    addOutcome(
+      outcomes,
+      "白名单",
+      false,
+      "以下元件不在关卡允许列表内：" + forbiddenUsed.join("、")
+    );
+  }
 
   for (let i = 0; i < level.tests.length; i++) {
     const test = level.tests[i];
@@ -105,6 +161,7 @@ export function runLevelTests(level: Level, design: Design): LevelResult {
       if (sim.unstable) unstable = true;
     }
 
+    // FIX-08: 期望值的位宽以骨架为准；学生输出位宽不足必须报失败，不能被截断绕过。
     const expectValue = (label: string, target: string, want: Value) => {
       const inst = findComp(design, target);
       if (!inst) {
@@ -116,12 +173,21 @@ export function runLevelTests(level: Level, design: Design): LevelResult {
         checks.push({ label, pass: false, detail: `${target} 没有可观测的输出脚` });
         return;
       }
+      const contractW = contract.get(target) ?? contract.get(inst.name ?? "") ?? got.width;
       const w = num(want);
-      const exp = mask(w, got.width);
+      const exp = mask(w, contractW);
+      if (got.width < contractW) {
+        checks.push({
+          label: `${label} ${target}`,
+          pass: false,
+          detail: `输出位宽 ${got.width} 小于契约 ${contractW} 位，禁止缩小比较域`,
+        });
+        return;
+      }
       checks.push({
         label: `${label} ${target}`,
-        pass: got.value === exp,
-        detail: `期望 ${fmt(exp, got.width)}，实际 ${fmt(got.value, got.width)}`,
+        pass: mask(got.value, contractW) === exp,
+        detail: `期望 ${fmt(exp, contractW)}，实际 ${fmt(got.value, got.width)}`,
       });
     };
 
@@ -135,7 +201,9 @@ export function runLevelTests(level: Level, design: Design): LevelResult {
         continue;
       }
       const mem = sim.readMemory(inst.id);
-      const bits = Number(inst.params.bitWidth) || 8;
+      // FIX-08: 存储位宽以骨架契约为准，避免学生改小后通过截断期望值绕过。
+      const contractBits = contract.get(m.name) ?? contract.get(inst.name ?? "");
+      const bits = contractBits ?? (Number(inst.params.bitWidth) || 8);
       const got = mask(mem[m.at] ?? 0, bits);
       const exp = mask(num(m.expect), bits);
       checks.push({

@@ -67,6 +67,9 @@ function tokenize(src: string): Tok[] {
     }
     if (/[A-Za-z_.#@]/.test(ch)) {
       let j = i;
+      // FIX-01: 前缀 #/@ 单独存在时不推进游标；先吃掉首字符再扫描剩余部分，
+      // 同时保留 `#label`、`@label` 这类整体作为立即数符号的语义。
+      if (j < src.length && (src[j] === "#" || src[j] === "@")) j++;
       while (j < src.length && /[A-Za-z0-9_.]/.test(src[j])) j++;
       out.push({ t: "id", v: src.slice(i, j) });
       i = j;

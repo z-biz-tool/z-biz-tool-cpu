@@ -241,8 +241,21 @@ export function buildNetlist(design: Design, circuit: Circuit): Netlist {
     else net.sinks.push(s);
   }
 
-  // 位宽推断（单调递增，迭代到不动点）
-  for (let round = 0; round < 24; round++) {
+  // 位宽推断（单调递增，迭代到不动点；超过预算仅作为告警，不阻断网络构建）
+  // FIX-02: 移除硬上限 24，改用真正的不动点 + 预算；区分预算用尽与振荡。
+  // 由于宽度按 Math.min(32, w) 单调上升，循环必然在 O(总节点数 × 32) 步内到达不动点，
+  // 预算 1024 用于捕获拓扑异常而非正常推断。预算用尽仅产生 warn 诊断。
+  let rounds = 0;
+  const WIDTH_BUDGET = 1024;
+  for (;;) {
+    if (++rounds > WIDTH_BUDGET) {
+      errors.push({
+        level: "warn",
+        msg: `位宽推断达预算上限 ${WIDTH_BUDGET} 轮（仍按已收敛的位宽继续构建）`,
+        comps: [],
+      });
+      break;
+    }
     let changed = false;
     for (const c of comps) {
       if ((c.def.widthMode ?? "auto") !== "auto" || c.boundary) continue;

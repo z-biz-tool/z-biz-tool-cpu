@@ -28,6 +28,9 @@ export const SIG = {
   BR_EN: 28,
   LAST: 29,
   PORT_SEL: 30,
+  // FIX-09: 标志位部分更新控制。=1 时写 Z/N 但保留 C，用于 AND/OR/XOR/NOT 这类
+  // 不产生进位的指令；与 FLAG_WE 同时置 1 即可生效。
+  FLAG_NO_C: 31,
 } as const;
 
 /** 两位选择域 → 起始位（各占 2 位） */
@@ -44,7 +47,7 @@ export const SEL = {
 } as const;
 
 export const ALU_OP_POS = 19;
-export const CTRL_BITS = 31;
+export const CTRL_BITS = 32;
 
 export type CtrlField = keyof typeof SIG | keyof typeof SEL | "ALU_OP";
 export type CtrlBits = Partial<Record<CtrlField, number>>;
@@ -81,6 +84,8 @@ export const CTRL_DOC: { name: string; bits: string; desc: string }[] = [
   { name: "MEM_WE", bits: "24", desc: "存储器写使能" },
   { name: "RF_WE", bits: "25", desc: "寄存器堆写使能" },
   { name: "FLAG_WE", bits: "26", desc: "更新 Z/C/N 标志" },
+  // FIX-09: 部分更新：写 Z/N 但保留 C；通常与 FLAG_WE 共用
+  { name: "FLAG_NO_C", bits: "31", desc: "标志位保留 C（仅更新 Z/N）" },
   { name: "HALT", bits: "27", desc: "停机：DONE 拉高并封锁所有写使能" },
   { name: "BR_EN", bits: "28", desc: "条件转移：PC 写入还要与 taken 相与" },
   { name: "LAST", bits: "29", desc: "本指令最后一拍，状态机回 0" },
@@ -114,7 +119,16 @@ function wrAlu(extra: CtrlBits): number {
 }
 
 const ALU_OF: Record<number, number> = { 3: 0, 4: 1, 5: 2, 6: 3, 7: 4, 8: 5, 9: 6, 10: 7 };
-const ARITH: Record<number, boolean> = { 3: true, 4: true }; // 只有加/减更新标志
+// FIX-09: 区分"写全部 Z/C/N"与"仅写 Z/N 保留 C"。加/减进位语义保持原状；与/或/异或/非
+// 不会产生进位，按 ISA 规范应只更新 Z/N。SR 系列（移位）保持不动标志位的旧语义。
+const ARITH: Record<number, { full: boolean }> = {
+  3: { full: true },  // ADD: Z/C/N
+  4: { full: true },  // SUB: Z/C/N
+  5: { full: false }, // AND: Z/N 保留 C
+  6: { full: false }, // OR: Z/N 保留 C
+  7: { full: false }, // XOR: Z/N 保留 C
+  8: { full: false }, // NOT: Z/N 保留 C
+};
 
 /** 单字指令在 ST=1 执行完；双字指令在 ST=2 执行完 */
 function execRow(op: number, sub: number): { one: number; two: number } {
@@ -127,9 +141,11 @@ function execRow(op: number, sub: number): { one: number; two: number } {
     return { one: 0, two: ctrlWord({ LAST: 1, RF_WE: 1, RF_DST: F.A, RF_SRC: RF_SRC.IMM, A_SEL: F.A }) };
   if (op in ALU_OF) {
     const aluOp = ALU_OF[op];
-    const flag = ARITH[op] ? 1 : 0;
-    if (op === 8) return { one: wrAlu({ ALU_OP: 5, ALU_A: ALU_A.RA, ALU_B: ALU_B.ZERO, FLAG_WE: flag }), two: RECOVER };
-    return { one: wrAlu({ ALU_OP: aluOp, ALU_A: ALU_A.RA, ALU_B: ALU_B.RB, FLAG_WE: flag }), two: RECOVER };
+    const flagSpec = ARITH[op];
+    const flagWrite = flagSpec ? 1 : 0;
+    const flagNoC = flagSpec && !flagSpec.full ? 1 : 0;
+    if (op === 8) return { one: wrAlu({ ALU_OP: 5, ALU_A: ALU_A.RA, ALU_B: ALU_B.ZERO, FLAG_WE: flagWrite, FLAG_NO_C: flagNoC }), two: RECOVER };
+    return { one: wrAlu({ ALU_OP: aluOp, ALU_A: ALU_A.RA, ALU_B: ALU_B.RB, FLAG_WE: flagWrite, FLAG_NO_C: flagNoC }), two: RECOVER };
   }
   if (op === 11)
     // CMP：只更新标志
@@ -425,16 +441,25 @@ function build(b: CircuitBuilder, r: { clk: string; mem: string; out: string; do
 
   /* ---- 标志 ---- */
   const flagNew = mergeBits([[alu, "zero"], [alu, "carry"], [alu, "neg"]], 4, 96);
+  // FIX-09: 把 flagNew 也拆成位，便于单独选择 C（保留 vs 覆盖）
+  const flagNewSplit = b.add("split", pos(20, 7), 96, { bitWidth: 4 });
+  b.connect(flagNew, "out", flagNewSplit, "in");
+  const newZ: Ref = [flagNewSplit, "b0"];
+  const newC: Ref = [flagNewSplit, "b1"];
+  const newN: Ref = [flagNewSplit, "b2"];
   const flags = b.add("reg", pos(20, 5), 96, {}, { name: "FLAGS" });
   const flagSplit = b.add("split", pos(20, 6), 96, { bitWidth: 4 });
   b.connect(flags, "q", flagSplit, "in");
-  const flagHold = mux([[flags, "q"], [flagNew, "out"]], sig("FLAG_WE"), 102);
-  b.connect(flagHold, "out", flags, "d");
-  b.connect(cHi, "out", flags, "load");
-  b.connect(r.clk, "out", flags, "clk");
   const FZ: Ref = [flagSplit, "b0"];
   const FC: Ref = [flagSplit, "b1"];
   const FN: Ref = [flagSplit, "b2"];
+  // FLAG_NO_C=1 时保留旧 C（用于 AND/OR/XOR/NOT 这类不产生进位的指令）
+  const cChoice = mux([newC, FC], sig("FLAG_NO_C"), 98);
+  const flagNewAdj = mergeBits([newZ, [cChoice, "out"], newN], 4, 100);
+  const flagHold = mux([[flags, "q"], [flagNewAdj, "out"]], sig("FLAG_WE"), 102);
+  b.connect(flagHold, "out", flags, "d");
+  b.connect(cHi, "out", flags, "load");
+  b.connect(r.clk, "out", flags, "clk");
 
   /* ---- 条件转移 ---- */
   const nz = invert(FZ, 108);
