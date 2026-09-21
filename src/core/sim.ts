@@ -2,6 +2,7 @@ import { buildNetlist, pinWidthOf, type Netlist, type SimComp, type SimNet } fro
 import { parseWordToken } from "./registry.ts";
 import type { Circuit, Design, EvalCtx, PinRef } from "./types.ts";
 import { mask } from "./types.ts";
+import { TraceStore, type SignalRef } from "./trace.ts";
 
 export interface PinValue {
   value: number;
@@ -45,6 +46,8 @@ export class Simulator {
   // 的条目，则把 Simulator 置入 COMPILE_ERROR 态，step/run 全部无效并返回 false，
   // 同时把诊断注入 logs 便于 UI 显示。已存在的 reset/setInput 仍然可用以便校正。
   hasBlockingError = false;
+  /** FIX-07: 信号轨迹（最近 N 拍变化量）；启用后 step/run 会同步采集 */
+  readonly trace: TraceStore = new TraceStore("sim-0");
 
   constructor(design: Design, circuit: Circuit) {
     this.design = design;
@@ -91,6 +94,8 @@ export class Simulator {
     this.nl.comps.forEach((_, ci) => {
       this.prevClk[ci] = this.clkValue(ci);
     });
+    // FIX-07: 采样本拍结束时的已命名元件值；同 tick 内 delta=1
+    this.captureTraceEndOfTick();
     return true;
   }
 
@@ -98,6 +103,34 @@ export class Simulator {
     if (this.hasBlockingError) return false;
     for (let i = 0; i < steps; i++) this.step();
     return true;
+  }
+
+  /** FIX-07: 在一次结算后记录所有已命名元件的可观测值到 TraceStore */
+  private captureTraceEndOfTick() {
+    this.trace.beginTick(this.time);
+    this.trace.beginDelta(1);
+    for (const c of this.nl.comps) {
+      if (c.boundary || !c.inst.name) continue;
+      const pinId =
+        c.def.type === "output"
+          ? "in"
+          : c.def.pins.find((p) => p.kind === "out" && !p.clock)?.id ??
+            c.def.pins.find((p) => p.kind === "out")?.id;
+      if (!pinId) continue;
+      const v = this.valueOf({ comp: c.id, pin: pinId });
+      if (!v) continue;
+      const ref: SignalRef = { compId: c.id, pin: pinId };
+      this.trace.record(ref, v.value, v.width, v.driven);
+    }
+  }
+
+  /** FIX-07: 设置输入时也立即记录一条（让 trace 起点对齐） */
+  setInputTrace(compId: string, value: number) {
+    this.setInput(compId, value);
+    this.trace.beginTick(this.time);
+    this.trace.beginDelta(0);
+    const c = this.compById(compId);
+    if (c) this.trace.record({ compId, pin: c.def.type === "clock" ? "hi" : "v" }, value, Math.max(1, c.bits), true);
   }
 
   get errors() {
@@ -108,7 +141,7 @@ export class Simulator {
     return this.nl.comps.filter((c) => !c.boundary).length;
   }
 
-/** FIX-04: 旧 dumpState 接口保留；返回深拷贝后的状态对象 */
+  /** FIX-04: 旧 dumpState 接口保留；返回深拷贝后的状态对象 */
   dumpState(): Record<string, Record<string, unknown>> {
     const out: Record<string, Record<string, unknown>> = {};
     for (const c of this.nl.comps) {

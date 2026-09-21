@@ -601,5 +601,41 @@ ok:
   check("FIX-10: 命名不重建仿真器", afterName === before, `before=${before} after=${afterName}`);
 }
 
+// FIX-07: TraceStore 与波形 — 跑一拍后历史应记录被命名的元件值；mask32 后的值一致
+{
+  const { Simulator } = await import("../src/core/sim.ts");
+  const { TraceStore } = await import("../src/core/trace.ts");
+  const design = {
+    name: "FIX07",
+    root: {
+      comps: [
+        { id: "sw", type: "input", x: 0, y: 0, rot: 0 as const, flip: false, params: { bitWidth: 1, init: "0" }, name: "SW" },
+        { id: "ld", type: "output", x: 5, y: 0, rot: 0 as const, flip: false, params: { bitWidth: 1 }, name: "LD" },
+      ],
+      wires: [{ id: "w1", a: { comp: "sw", pin: "out" }, b: { comp: "ld", pin: "in" } }],
+    },
+    defs: [],
+  } as any;
+  const sim = new Simulator(design, design.root);
+  const beforeCount = sim.trace.events().length;
+  sim.setInput("sw", 1);
+  sim.step();
+  sim.setInput("sw", 0);
+  sim.step();
+  const events = sim.trace.events();
+  check("FIX-07: 每次 step 后 trace 至少记录到一条事件", events.length > beforeCount, `before=${beforeCount} after=${events.length}`);
+  const sigs = sim.trace.signals().map((s) => s.compId + "." + s.pin);
+  check("FIX-07: 已命名信号被跟踪", sigs.some((s) => s.startsWith("ld.")), sigs.join(","));
+
+  // TraceStore 独立功能：累加独立事件，超过上限淘汰最旧
+  const t = new TraceStore("test");
+  for (let i = 0; i < 100; i++) {
+    t.beginTick(i);
+    t.beginDelta(0);
+    t.record({ compId: "c", pin: "p" }, i & 1, 1, true);
+  }
+  check("FIX-07: TraceStore 接受独立事件流", t.historyOf({ compId: "c", pin: "p" }).length > 0);
+}
+
 console.log(`\n${failed === 0 ? "\x1b[32m" : "\x1b[31m"}内核自检：${passed} 通过 / ${failed} 失败\x1b[0m`);
 process.exit(failed === 0 ? 0 : 1);

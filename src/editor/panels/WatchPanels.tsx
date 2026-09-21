@@ -1,5 +1,5 @@
 import { Button, Empty, Table, Tag } from "antd";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { CONDS, OPS, REG_NAMES, SYSS } from "../../asm/isa.ts";
 import { isaDoc } from "../../asm/assembler.ts";
 import { CTRL_DOC } from "../../cpu/reference.ts";
@@ -62,6 +62,71 @@ export function ProbePanel() {
           { title: "类型", dataIndex: "kind", width: 50, render: (k: string) => <Tag>{k}</Tag> },
         ]}
       />
+      {/* FIX-07: 在探针表下方追加波形面板，紧凑显示最近 N 拍变化 */}
+      <WaveformPanel />
+    </div>
+  );
+}
+
+/** FIX-07: 简易波形面板 — 用 CSS 横向延伸的色块表示每拍值的变化 */
+function WaveformPanel() {
+  const sim = useEditor((s) => s.sim);
+  const tick = useEditor((s) => s.tick);
+  const [open, setOpen] = useState(false);
+  const sigs = useMemo(() => sim.trace.signals(), [sim, tick]);
+  if (!open) {
+    return (
+      <div style={{ marginTop: 12 }}>
+        <Button size="small" onClick={() => setOpen(true)}>
+          显示最近 N 拍波形 ({sigs.length} 信号)
+        </Button>
+      </div>
+    );
+  }
+  return (
+    <div style={{ marginTop: 12 }}>
+      <div className="asm-actions">
+        <Tag color="purple">FIX-07 波形</Tag>
+        <span className="dim">每行一个信号，每格一拍；同色 = 同值，色块长度即持续拍数</span>
+        <Button size="small" style={{ marginLeft: "auto" }} onClick={() => setOpen(false)}>
+          收起
+        </Button>
+      </div>
+      {sigs.length === 0 ? (
+        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没记录到事件，先跑一拍" />
+      ) : (
+        sigs.map((s) => {
+          const ev = sim.trace.historyOf(s, 64);
+          const compact = ev.map((e) => ({ tick: e.tick, value: e.value, w: e.width })).reverse();
+          return (
+            <div key={s.compId + "." + s.pin} style={{ display: "flex", gap: 4, alignItems: "center", margin: "4px 0" }}>
+              <span className="dim" style={{ width: 110, fontSize: 11, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                {s.compId}.{s.pin}
+              </span>
+              <div style={{ display: "flex", flexDirection: "row-reverse", gap: 1, flex: 1, overflowX: "auto" }}>
+                {compact.map((c, i) => {
+                  const bits = c.w > 1 ? hex(c.value, c.w) : String(c.value);
+                  return (
+                    <span
+                      key={i}
+                      title={`tick ${c.tick} = ${bits}`}
+                      style={{
+                        fontSize: 10,
+                        padding: "0 4px",
+                        borderRight: "1px solid #ddd",
+                        background: c.value ? "#1677ff22" : "#88888822",
+                        color: c.value ? "#1677ff" : "#666",
+                      }}
+                    >
+                      {c.w > 4 ? hex(c.value, c.w) : c.value}
+                    </span>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })
+      )}
     </div>
   );
 }
