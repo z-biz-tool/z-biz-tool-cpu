@@ -680,5 +680,67 @@ ok:
   check("M1: ProjectFile 序列化往返一致", ok.ok && ok.project?.id === proj.id, ok.issues.map((i) => i.msg).join(";"));
 }
 
+// IMP-07: 编辑命令栈 — 事务化执行/撤销/重做
+{
+  const { CommandStack } = await import("../src/editor/commands/stack.ts");
+  const baseDesign = (): any => ({
+    name: "Test",
+    root: { comps: [] as any[], wires: [] as any[] },
+    defs: [] as any[],
+  });
+
+  const mkAdd = (id: string) => ({
+    label: "add " + id,
+    kind: "topology" as const,
+    apply: (c: any) => {
+      c.comps.push({ id, type: "input", x: 0, y: 0, rot: 0, flip: false, params: { bitWidth: 1, init: "0" } });
+    },
+  });
+  const mkMove = (id: string, dx: number, dy: number) => ({
+    label: "mv " + id,
+    kind: "layout" as const,
+    apply: (c: any) => {
+      const t = c.comps.find((x: any) => x.id === id);
+      if (t) { t.x += dx; t.y += dy; }
+    },
+  });
+
+  const s = new CommandStack();
+  let d = baseDesign();
+  // 单条命令
+  d = s.exec(d, mkAdd("a"));
+  d = s.exec(d, mkAdd("b"));
+  check("IMP-07: 连续 exec 增加 comps 数", d.root.comps.length === 2, "comps=" + d.root.comps.length);
+
+  // 事务：3 个移动合并为 1 条 undo
+  s.beginTransaction("拖动", "layout", d);
+  d = s.execInTx(d, mkMove("a", 1, 0));
+  d = s.execInTx(d, mkMove("a", 1, 0));
+  d = s.execInTx(d, mkMove("b", 0, 1));
+  const committed = s.commitTransaction();
+  check("IMP-07: 事务 commit 返回 last design", !!committed);
+
+  // 撤销一次回到两个 add 之后；不会陷入单步移动的中间态
+  const undo1 = s.undoOne(d);
+  const prevComps = (undo1?.prev.root.comps ?? []).length;
+  check("IMP-07: 一次 undo 撤销整个事务（回到拖动前 2 个 comps）", prevComps === 2, `comps=${prevComps}`);
+
+  // redo 重新应用
+  const redo = s.redoLast(d);
+  check("IMP-07: redo 返回事务后的 design", !!redo && redo.root.comps.length === 2);
+
+  // 回滚事务：begin 后 execInTx 不应保留
+  s.beginTransaction("放弃", "layout", d);
+  d = s.execInTx(d, mkMove("a", 5, 5));
+  const rollback = s.rollbackTransaction();
+  check("IMP-07: rollback 丢弃事务缓冲", !!rollback);
+
+  // 历史深度不超过 MAX_HISTORY=60（多次 exec 不应爆栈）
+  const s2 = new CommandStack();
+  let dd = baseDesign();
+  for (let i = 0; i < 80; i++) dd = s2.exec(dd, mkAdd("x" + i));
+  check("IMP-07: 历史栈深度被 MAX_HISTORY 限制 ≤ 60", s2.size() <= 60, `size=${s2.size()}`);
+}
+
 console.log(`\n${failed === 0 ? "\x1b[32m" : "\x1b[31m"}内核自检：${passed} 通过 / ${failed} 失败\x1b[0m`);
 process.exit(failed === 0 ? 0 : 1);
