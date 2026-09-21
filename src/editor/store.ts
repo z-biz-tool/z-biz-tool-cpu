@@ -55,7 +55,10 @@ export interface EditorState {
   /** "root" 或子电路 def id */
   view: string;
   sim: Simulator;
+  /** 设计内容版本（每次 design 引用变更 +1，给列表/列表订阅者用） */
   tick: number;
+  /** FIX-10: 仿真器重建版本（只有拓扑/参数改动才递增；纯布局不递增） */
+  simRev: number;
   camera: Camera;
   /** 画布像素尺寸，fitView 需要 */
   viewport: { w: number; h: number };
@@ -195,7 +198,7 @@ export const useEditor = create<EditorState>((set, get) => {
     const design: Design = { ...st.design };
     sim = new Simulator(design, currentCircuit(design, st.view));
     if (prev) sim.restoreState(prev);
-    set({ design, sim, tick: st.tick + 1, result: null });
+    set({ design, sim, tick: st.tick + 1, simRev: st.simRev + 1, result: null });
     if (label) saveSlot("autosave", design);
   };
 
@@ -205,12 +208,20 @@ export const useEditor = create<EditorState>((set, get) => {
     after(label);
   };
 
+  /** FIX-10: 纯布局变更 — 更新 design 引用但不重建仿真器；切关 / 自动保存仍照常 */
+  const mutateLayout = (fn: (c: Circuit) => void, label = "布局") => {
+    const st = get();
+    fn(currentCircuit(st.design, st.view));
+    set({ design: { ...st.design }, tick: st.tick + 1, result: null });
+    if (label) saveSlot("autosave", st.design);
+  };
+
   /** 整体替换设计（撤销/重做/载入/进关卡） */
   const replace = (design: Design, view: string) => {
     const st = get();
     const v = view === "root" || design.defs.some((d) => d.id === view) ? view : "root";
     sim = new Simulator(design, currentCircuit(design, v));
-    set({ design, view: v, sim, tick: st.tick + 1, result: null });
+    set({ design, view: v, sim, tick: st.tick + 1, simRev: st.simRev + 1, result: null });
     saveSlot("autosave", design);
   };
 
@@ -219,6 +230,7 @@ export const useEditor = create<EditorState>((set, get) => {
     view: "root",
     sim,
     tick: 0,
+    simRev: 0,
     camera: { x: 6, y: 6, zoom: 1 },
     viewport: { w: 1200, h: 800 },
     tool: "select",
@@ -385,7 +397,8 @@ export const useEditor = create<EditorState>((set, get) => {
       const st = get();
       const comps = new Set(st.selection.comps);
       if (!comps.size || (!dx && !dy)) return;
-      mutate((c) => {
+      // FIX-10: 移动/对齐不重建仿真器（拓扑未变）
+      mutateLayout((c) => {
         for (const inst of c.comps) {
           if (!comps.has(inst.id)) continue;
           inst.x += dx;
@@ -421,7 +434,8 @@ export const useEditor = create<EditorState>((set, get) => {
         return;
       }
       st.pushHistory("旋转");
-      mutate((c) => {
+      // FIX-10: 旋转不改拓扑
+      mutateLayout((c) => {
         for (const inst of c.comps) if (ids.has(inst.id)) inst.rot = ((inst.rot + 1) % 4) as Rot;
       }, "旋转");
     },
@@ -430,7 +444,8 @@ export const useEditor = create<EditorState>((set, get) => {
       const ids = new Set(st.selection.comps);
       if (!ids.size) return;
       st.pushHistory("镜像");
-      mutate((c) => {
+      // FIX-10: 镜像不改拓扑
+      mutateLayout((c) => {
         for (const inst of c.comps) if (ids.has(inst.id)) inst.flip = !inst.flip;
       }, "镜像");
     },
@@ -449,7 +464,8 @@ export const useEditor = create<EditorState>((set, get) => {
     setCompName(compId, name) {
       const st = get();
       st.pushHistory("命名");
-      mutate((c) => {
+      // FIX-10: 命名/标签属于布局变更，不重建仿真器
+      mutateLayout((c) => {
         const target = c.comps.find((x) => x.id === compId);
         if (target) target.name = name || undefined;
       }, "命名");

@@ -521,5 +521,85 @@ ok:
   );
 }
 
+// FIX-04: 快照深拷贝 — 修改 RAM 后续写入不能污染历史快照
+{
+  const b = new CircuitBuilder();
+  // 用一个 writeMemory 即可触达的 RAM 元件；先把字 [0] = 0x1234
+  const mem = b.add("ram", 4, 0, { bitWidth: 16, addrBits: 4, data: "", we: "in-WE", clk: "in-CLK", w: "in-D", a: "in-A" });
+  const sim = mkSim(b.build());
+  sim.writeMemory(mem, [0x1234, 0, 0, 0]);
+  // 强制 RAM 求值一次建立 _mem
+  sim.readMemory(mem);
+  // 取快照
+  const snap = sim.snapshot();
+  const before = snap.comps[mem]?._mem as number[] | undefined;
+  // 第二次写入
+  sim.writeMemory(mem, [0xbeef, 0, 0, 0]);
+  sim.readMemory(mem);
+  const after = snap.comps[mem]?._mem as number[] | undefined;
+  check("FIX-04: 快照不受后续 RAM 写入影响", !!before && !!after && before[0] === 0x1234 && after[0] === 0x1234,
+    `before=${before?.[0]?.toString(16)} after=${after?.[0]?.toString(16)}`);
+
+  // 恢复应回到 0x1234
+  const restored = sim.restore(snap);
+  const memNow = sim.readMemory(mem);
+  check(
+    "FIX-04: restore 把快照字恢复到仿真器",
+    restored && memNow[0] === 0x1234,
+    `restored=${restored} mem=${memNow[0]?.toString(16)}`
+  );
+
+  // 版本不匹配时 restore 返回 false，不破坏现状
+  const fake: any = { ...snap, netHash: snap.netHash ^ 1 };
+  const okBad = sim.restore(fake);
+  check("FIX-04: 网表哈希不匹配拒绝恢复", okBad === false, "okBad=" + okBad);
+}
+
+// FIX-10: 布局变更不重建仿真器；拓扑变更才重建
+{
+  const { useEditor } = await import("../src/editor/store.ts");
+  const { Simulator } = await import("../src/core/sim.ts");
+  const fixedDesign = {
+    name: "FIX10",
+    root: {
+      comps: [
+        { id: "x", type: "input", x: 0, y: 0, rot: 0 as const, flip: false, params: { bitWidth: 1, init: "0" }, name: "X" },
+      ],
+      wires: [] as never[],
+    },
+    defs: [] as never[],
+  } as const;
+  // 直接给 store 设 design + sim + simRev=0，绕开初始空 store
+  const sim = new Simulator(fixedDesign as any, (fixedDesign as any).root);
+  useEditor.setState({
+    design: fixedDesign as any,
+    view: "root",
+    sim,
+    simRev: 0,
+    selection: { comps: ["x"], wires: [] },
+  } as any);
+
+  const before = (useEditor.getState() as any).simRev as number;
+  // FIX-10: 移动不应触发 simRev++
+  useEditor.getState().moveSelection(2, 0);
+  const afterMove = (useEditor.getState() as any).simRev as number;
+  check("FIX-10: 移动不重建仿真器（simRev 不变）", afterMove === before, `before=${before} after=${afterMove}`);
+
+  // FIX-10: 旋转不重建
+  useEditor.getState().rotateSelection();
+  const afterRot = (useEditor.getState() as any).simRev as number;
+  check("FIX-10: 旋转不重建仿真器", afterRot === before, `before=${before} after=${afterRot}`);
+
+  // FIX-10: 镜像不重建
+  useEditor.getState().flipSelection();
+  const afterFlip = (useEditor.getState() as any).simRev as number;
+  check("FIX-10: 镜像不重建仿真器", afterFlip === before, `before=${before} after=${afterFlip}`);
+
+  // FIX-10: 命名不重建
+  useEditor.getState().setCompName("x", "IN");
+  const afterName = (useEditor.getState() as any).simRev as number;
+  check("FIX-10: 命名不重建仿真器", afterName === before, `before=${before} after=${afterName}`);
+}
+
 console.log(`\n${failed === 0 ? "\x1b[32m" : "\x1b[31m"}内核自检：${passed} 通过 / ${failed} 失败\x1b[0m`);
 process.exit(failed === 0 ? 0 : 1);

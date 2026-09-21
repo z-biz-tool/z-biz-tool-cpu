@@ -108,19 +108,80 @@ export class Simulator {
     return this.nl.comps.filter((c) => !c.boundary).length;
   }
 
-  /** 保留 RAM/ROM 内容与开关状态的快照 */
+/** FIX-04: 旧 dumpState 接口保留；返回深拷贝后的状态对象 */
   dumpState(): Record<string, Record<string, unknown>> {
     const out: Record<string, Record<string, unknown>> = {};
-    for (const c of this.nl.comps) if (Object.keys(c.state).length) out[c.id] = { ...c.state };
+    for (const c of this.nl.comps) {
+      if (Object.keys(c.state).length) out[c.id] = deepCloneState(c.state);
+    }
     return out;
   }
 
   restoreState(map: Record<string, Record<string, unknown>>) {
     for (const c of this.nl.comps) {
       const s = map[c.id];
-      if (s) Object.assign(c.state, s);
+      if (!s) continue;
+      // FIX-04: 恢复时也要深拷贝，避免恢复的数组随后被组件内部覆盖而共享
+      const cloned = deepCloneState(s);
+      for (const k of Object.keys(c.state)) delete c.state[k];
+      Object.assign(c.state, cloned);
     }
     this.settle();
+  }
+
+  /** FIX-04: 完整快照 — 含 nets 值、time、prevClk、logs；任何后续运行不能修改已保存的快照 */
+  snapshot(): SimSnapshot {
+    const comps: Record<string, Record<string, unknown>> = {};
+    for (const c of this.nl.comps) {
+      if (Object.keys(c.state).length) comps[c.id] = deepCloneState(c.state);
+    }
+    // FIX-04: 同时把 RAM/ROM 的 params.data 一起保存，避免内存内容与设计文件 params 失同步
+    const mems: Record<string, string> = {};
+    for (const c of this.nl.comps) {
+      if (c.def.type === "ram" || c.def.type === "rom") {
+        const d = c.inst.params.data;
+        if (typeof d === "string") mems[c.id] = d;
+      }
+    }
+    const netValues: Record<number, number> = {};
+    for (let i = 0; i < this.nl.nets.length; i++) netValues[i] = this.nl.nets[i].value;
+    return {
+      format: SNAPSHOT_FORMAT,
+      netHash: this.nl.comps.length ^ this.nl.nets.length,
+      time: this.time,
+      logs: this.logs.slice(),
+      prevClk: this.prevClk.slice(),
+      netValues,
+      comps,
+      mems,
+    } as SimSnapshot;
+  }
+
+  /** FIX-04: 把快照恢复到 Simulator；版本不匹配则保留现状并返回 false */
+  restore(snap: SimSnapshot): boolean {
+    if (snap.format !== SNAPSHOT_FORMAT) return false;
+    if (snap.netHash !== (this.nl.comps.length ^ this.nl.nets.length)) return false;
+    this.time = snap.time;
+    this.logs = snap.logs.slice();
+    this.prevClk = snap.prevClk.slice();
+    for (let i = 0; i < this.nl.nets.length; i++) this.nl.nets[i].value = snap.netValues[i] ?? 0;
+    // 恢复 RAM/ROM 的 params.data，避免下次求值从新数据重新加载
+    if (snap.mems) {
+      for (const c of this.nl.comps) {
+        if ((c.def.type === "ram" || c.def.type === "rom") && snap.mems[c.id] !== undefined) {
+          c.inst.params.data = snap.mems[c.id];
+        }
+      }
+    }
+    for (const c of this.nl.comps) {
+      const s = snap.comps[c.id];
+      if (!s) continue;
+      const cloned = deepCloneState(s);
+      for (const k of Object.keys(c.state)) delete c.state[k];
+      Object.assign(c.state, cloned);
+    }
+    this.settle();
+    return true;
   }
 
   reset() {
@@ -388,4 +449,41 @@ export class Simulator {
     }
     return out;
   }
+}
+
+/** FIX-04: 快照 — 必须深拷贝可变数组（特别是 RAM 的 _mem），后续写入不能污染历史 */
+const SNAPSHOT_FORMAT = "sim-snapshot/1";
+
+export interface SimSnapshot {
+  format: string;
+  /** 取自当时设计的 netlist 拓扑哈希（当前不计算，逐版本追踪用） */
+  netHash: number;
+  time: number;
+  logs: SimLog[];
+  prevClk: number[];
+  /** net 下标 → value，避免对外暴露 SimNet 引用 */
+  netValues: Record<number, number>;
+  /** comp.id → 深拷贝后的 state（_mem 等数组复制到独立内存） */
+  comps: Record<string, Record<string, unknown>>;
+  /** RAM/ROM 内容的字符串形式（FIX-04：保证 RAM 字跟随快照而不是被新 writeMemory 覆盖） */
+  mems?: Record<string, string>;
+}
+
+function deepCloneState(state: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const k of Object.keys(state)) {
+    const v = state[k];
+    if (Array.isArray(v)) out[k] = v.slice();
+    else if (v instanceof Uint8Array || v instanceof Int32Array || v instanceof Uint32Array) {
+      const ctor = v.constructor as unknown as new (n: number) => typeof v;
+      const copy = new ctor(v.length);
+      (copy as unknown as { set: (src: typeof v) => void }).set(v);
+      out[k] = copy;
+    } else if (v && typeof v === "object") {
+      out[k] = { ...(v as Record<string, unknown>) };
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
 }

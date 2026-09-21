@@ -125,6 +125,11 @@ export default function CpuPanel() {
 
   return (
     <div className="panel-body">
+      {/* FIX-06: 明确运行对象身份 — 这台 CPU 是参考机，不是用户画布 */}
+      <div className="cpu-identity">
+        <Tag color="blue" style={{ marginRight: 8 }}>参考 Z16</Tag>
+        <span className="dim">运行对象：参考机（与画布上的电路独立，可在另一标签查看你的设计）</span>
+      </div>
       <div className="panel-note">
         参考 CPU 是模块内置的一台 Z16 机器：取指 → 译码 → 执行 → 写回，全部由门电路和寄存器搭出来。
         下面的状态每拍刷新一次。
