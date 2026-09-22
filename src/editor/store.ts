@@ -4,7 +4,7 @@ import { CircuitBuilder } from "../core/build.ts";
 import { customCost, defOf, pinProblem, totalCost } from "../core/custom.ts";
 import { baseDef, defaultParams } from "../core/registry.ts";
 import { cloneDesign, emptyDesign, loadSlot, parse, saveSlot, serialize } from "../core/serialize.ts";
-import { DraftWriter } from "../core/draft.ts";
+import { DRAFT_LOCK, DraftWriter, EditRight } from "../core/draft.ts";
 import type { Circuit, CompInstance, CustomDef, Design, PinRef, Point, Rot, Wire } from "../core/types.ts";
 import { GRID, uid } from "../core/types.ts";
 import { levelById, levelDesign } from "../challenges/levels.ts";
@@ -236,6 +236,21 @@ export const useEditor = create<EditorState>((set, get) => {
     return `另一个标签页更新了这份草稿，本页已停止自动存档。${who}本页改动已另存为「${res.copyName}」，可接管草稿继续，或打开冲突副本对比。`;
   };
 
+  const NO_RIGHT = "编辑权在另一个标签页，本页改为只读：改动还在内存里，点「接管草稿」可以把编辑权拿过来。";
+  /* doc 05 §3.2：一份草稿一个 Web Lock。先打开的标签页可写，后来的排队只读；
+   * 锁随标签页关闭由浏览器释放，所以不设超时、不写锁标记。浏览器没有 Web Locks
+   * 时这条直接不成立，退回 draft.ts 的写前比对兜底。 */
+  const right = new EditRight(DRAFT_LOCK, (canWrite) => {
+    if (canWrite) {
+      const s = get().save;
+      if (s.currentRevision !== s.savedRevision) commitDraft();
+    } else if (!draft.conflictInfo()) {
+      set({ save: nextSaveState(get().save, { type: "readonly", error: NO_RIGHT }) });
+    }
+  });
+  right.acquire();
+  draft.setGate(() => right.inControl);
+
   const commitDraft = () => {
     const rev = get().save.currentRevision;
     set({ save: nextSaveState(get().save, { type: "flush-start" }) });
@@ -244,6 +259,8 @@ export const useEditor = create<EditorState>((set, get) => {
       set({ save: nextSaveState(get().save, { type: "flush-success", revision: rev }) });
     } else if (res.kind === "failed") {
       set({ save: nextSaveState(get().save, { type: "flush-failed", error: res.error }) });
+    } else if (res.kind === "no-right") {
+      set({ save: nextSaveState(get().save, { type: "readonly", error: NO_RIGHT }) });
     } else {
       set({ save: nextSaveState(get().save, { type: "readonly", error: conflictNote(res) }) });
     }
@@ -890,7 +907,8 @@ export const useEditor = create<EditorState>((set, get) => {
       commitDraft();
     },
     takeOverDraft() {
-      // 用户显式选择「以本页为准」：对方的那一版此后作为新基线
+      // 用户显式选择「以本页为准」：先抢回编辑权，再把对方的那一版当作新基线
+      right.claim();
       draft.resume();
       commitDraft();
     },

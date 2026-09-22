@@ -1323,6 +1323,9 @@ ok:
   {
     const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
     const store = new Map<string, string>();
+    const realNav = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+    // 这一节测的是写前比对兜底，先把 Web Locks 摘掉；锁那一层由下一节单独测
+    Object.defineProperty(globalThis, "navigator", { value: {}, configurable: true });
     (globalThis as any).window = {
       localStorage: {
         getItem: (k: string) => store.get(k) ?? null,
@@ -1445,6 +1448,223 @@ ok:
     );
 
     delete (globalThis as any).window;
+    if (realNav) Object.defineProperty(globalThis, "navigator", realNav);
+  }
+
+  /* doc 05 §3.2 主路径：Web Locks 独占编辑权。用一个按规范排队 / 支持 steal 的
+   * 假锁管理器驱动真实代码，第二个标签页从开机就该只读，而不是等它写一次才发现。 */
+  {
+    const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+    const store = new Map<string, string>();
+    const realNav = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+    (globalThis as any).window = {
+      localStorage: {
+        getItem: (k: string) => store.get(k) ?? null,
+        setItem: (k: string, v: string) => void store.set(k, v),
+        removeItem: (k: string) => void store.delete(k),
+        key: (i: number) => [...store.keys()][i] ?? null,
+        get length() {
+          return store.size;
+        },
+      },
+      addEventListener: () => {},
+    };
+    const ser = await import("../src/core/serialize.ts");
+
+    type Holder = { ctrl: AbortController; done: Promise<unknown> };
+    const makeLocks = () => {
+      let holder: Holder | null = null;
+      const queue: { start: () => void }[] = [];
+      const pump = () => {
+        if (holder || !queue.length) return;
+        queue.shift()!.start();
+      };
+      return {
+        request: (_name: string, opts: unknown, cb?: unknown) => {
+          const callback = (typeof opts === "function" ? opts : cb) as (lock: { signal: AbortSignal }) => Promise<unknown>;
+          const options = (typeof opts === "function" ? {} : (opts ?? {})) as { steal?: boolean };
+          return new Promise<void>((resolve, reject) => {
+            const start = () => {
+              const ctrl = new AbortController();
+              const done = Promise.resolve().then(() => callback({ signal: ctrl.signal }));
+              holder = { ctrl, done };
+              done.then(
+                () => {
+                  holder = null;
+                  resolve();
+                  pump();
+                },
+                (e) => {
+                  holder = null;
+                  reject(e);
+                }
+              );
+            };
+            if (options.steal && holder) {
+              queue.unshift({ start });
+              // 规范里抢锁是先给持有者发 cancel，等它自己放手（放手后 pump 才会发放）
+              holder.ctrl.signal.dispatchEvent(new Event("cancel"));
+            } else if (!holder) start();
+            else queue.push({ start });
+          });
+        },
+        _held: () => holder !== null,
+        _abort: () => holder?.ctrl.signal.dispatchEvent(new Event("abort")),
+      };
+    };
+    const locks = makeLocks();
+    Object.defineProperty(globalThis, "navigator", { value: { locks }, configurable: true });
+
+    const { useEditor: tabA } = await import("../src/editor/store.ts");
+    const other = (tag: string) => "../src/editor/store.ts?tab=" + tag;
+    const tabC = (await import(other("c")) as { useEditor: typeof tabA }).useEditor;
+    await wait(10);
+    check("LW: 先打开的标签页拿到编辑权", locks._held() && tabC.getState().save.label !== "readonly", JSON.stringify(tabC.getState().save));
+    tabC.getState().newDesign();
+    await wait(900);
+    check("LW: 持有者正常自动存档", tabC.getState().save.label === "saved" && !!ser.readSlotText("autosave"), JSON.stringify(tabC.getState().save));
+
+    const tabD = (await import(other("d")) as { useEditor: typeof tabA }).useEditor;
+    await wait(10);
+    tabD.getState().newDesign();
+    await wait(900);
+    const dSave = tabD.getState().save;
+    check("LW: 第二个标签页开机即只读", dSave.label === "readonly" && /编辑权/.test(dSave.error ?? ""), JSON.stringify(dSave));
+    const cDraft = ser.readSlotText("autosave");
+    check("LW: 排队中的标签页一次都没写", ser.readSlotText("autosave") === cDraft);
+    check("LW: 只是没编辑权时不生成冲突副本", !ser.listSlots().some((x) => x.key.startsWith("conflict-")), ser.listSlots().map((x) => x.key).join(","));
+
+    tabD.getState().takeOverDraft();
+    await wait(20);
+    await wait(900);
+    check(
+      "LW: 接管后编辑权换人且立刻补写",
+      tabD.getState().save.label === "saved" && tabC.getState().save.label === "readonly" && ser.readSlotText("autosave") !== cDraft,
+      JSON.stringify([tabD.getState().save.label, tabC.getState().save.label])
+    );
+    check("LW: 失去编辑权的一方被明确告知", /编辑权/.test(tabC.getState().save.error ?? ""), tabC.getState().save.error ?? "");
+
+    // 同域另一页可以按名字直接 abort 这把锁：收到 abort 也只能停笔，不能继续写
+    locks._abort();
+    await wait(20);
+    check("LW: 锁被 abort 时本页转入只读", tabD.getState().save.label === "readonly", JSON.stringify(tabD.getState().save));
+    const dDraft = ser.readSlotText("autosave");
+    tabD.getState().placeComp("and", 4, 4);
+    await wait(900);
+    check("LW: 被 abort 后不再写共享草稿", ser.readSlotText("autosave") === dDraft, "abort 之后仍然落盘");
+
+    // 锁不可用的平台（request 兑现却从不发放）不能把页面钉死
+    Object.defineProperty(globalThis, "navigator", { value: { locks: { request: () => Promise.resolve() } }, configurable: true });
+    const tabE = (await import(other("e")) as { useEditor: typeof tabA }).useEditor;
+    await wait(10);
+    tabE.getState().newDesign();
+    await wait(900);
+    check(
+      "LW: 锁发放不下来时退回写前比对而不是永久只读",
+      tabE.getState().save.label !== "readonly" && !!ser.readSlotText("autosave"),
+      JSON.stringify(tabE.getState().save)
+    );
+    check("LW: 兜底路径仍会认出别人改过草稿", tabE.getState().save.label === "saved" || tabE.getState().save.label === "failed", tabE.getState().save.label);
+
+    delete (globalThis as any).window;
+    if (realNav) Object.defineProperty(globalThis, "navigator", realNav);
+  }
+
+  /* 上一节的假锁管理器按我理解的规范写的，规范里被抢锁的一方 request() 会直接
+   * 失败 —— 这一点假实现没模仿到，也正是「输掉锁的那一页偷偷继续写」的坑。
+   * 这里换成运行时自带的真实 Web Locks（Node 26 实现了 navigator.locks）再跑一遍。 */
+  {
+    const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+    const realNav = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+    const hasRealLocks = !!globalThis.navigator?.locks?.request;
+    check("LG: 运行时自带真实 Web Locks", hasRealLocks, typeof navigator?.locks);
+
+    if (hasRealLocks) {
+      const store = new Map<string, string>();
+      (globalThis as any).window = {
+        localStorage: {
+          getItem: (k: string) => store.get(k) ?? null,
+          setItem: (k: string, v: string) => void store.set(k, v),
+          removeItem: (k: string) => void store.delete(k),
+          key: (i: number) => [...store.keys()][i] ?? null,
+          get length() {
+            return store.size;
+          },
+        },
+        addEventListener: () => {},
+      };
+      const ser = await import("../src/core/serialize.ts");
+      const { useEditor: base } = await import("../src/editor/store.ts");
+      const tab = (tag: string) => "../src/editor/store.ts?tab=" + tag;
+
+      /* 前面章节里已经有一个应用实例先拿到这把真实锁、并且不会放手，所以不能拿
+       * 「谁先 import」当持有者。先让 F 显式接管，后面才按持有者 / 排队者 /
+       * 被抢走的人三种身份逐个核对。 */
+      const tabF = (await import(tab("f")) as { useEditor: typeof base }).useEditor;
+      await wait(50);
+      tabF.getState().takeOverDraft();
+      await wait(50);
+      tabF.getState().newDesign();
+      await wait(900);
+      check(
+        "LG: 真实 steal 让接管页拿到编辑权",
+        tabF.getState().save.label === "saved" && !!ser.readSlotText("autosave"),
+        JSON.stringify(tabF.getState().save)
+      );
+      const fDraft = ser.readSlotText("autosave");
+
+      const tabG = (await import(tab("g")) as { useEditor: typeof base }).useEditor;
+      await wait(50);
+      tabG.getState().newDesign();
+      await wait(900);
+      check(
+        "LG: 真实锁让后开的标签页开机即只读",
+        tabG.getState().save.label === "readonly" && /编辑权/.test(tabG.getState().save.error ?? ""),
+        JSON.stringify(tabG.getState().save)
+      );
+      check("LG: 排队中的标签页一次都没写", ser.readSlotText("autosave") === fDraft);
+      check("LG: 只是没编辑权时不生成冲突副本", !ser.listSlots().some((s) => s.key.startsWith("conflict-")), ser.listSlots().map((s) => s.key).join(","));
+
+      tabG.getState().takeOverDraft();
+      await wait(50);
+      await wait(900);
+      check(
+        "LG: 真实 steal 把编辑权交给了接管方",
+        tabG.getState().save.label === "saved" && ser.readSlotText("autosave") !== fDraft,
+        JSON.stringify([tabG.getState().save.label, ser.readSlotText("autosave") === fDraft])
+      );
+      const gDraft = ser.readSlotText("autosave");
+
+      /* 这一条是真实锁才暴露得出的：Node 在锁被抢走时让 request() 抛 AbortError。
+       * 处理成「锁不可用」就会把写入权还给刚输掉的一页，两页同时写同一份草稿。 */
+      await wait(50);
+      check(
+        "LG: 被真实锁收走编辑权的一方转入只读",
+        tabF.getState().save.label === "readonly" && /编辑权/.test(tabF.getState().save.error ?? ""),
+        JSON.stringify(tabF.getState().save)
+      );
+      tabF.getState().placeComp("and", 3, 3);
+      await wait(900);
+      check("LG: 输掉锁的一页此后再没写过草稿", ser.readSlotText("autosave") === gDraft, "被抢锁后偷偷恢复写入");
+      check("LG: 抢锁过程不需要冲突副本", !ser.listSlots().some((s) => s.key.startsWith("conflict-")), ser.listSlots().map((s) => s.key).join(","));
+
+      tabF.getState().takeOverDraft();
+      await wait(50);
+      await wait(900);
+      check(
+        "LG: 编辑权可以再抢回来，双方结论对称",
+        tabF.getState().save.label === "saved" && tabG.getState().save.label === "readonly" && ser.readSlotText("autosave") !== gDraft,
+        JSON.stringify([tabF.getState().save.label, tabG.getState().save.label])
+      );
+
+      // TS 的 lib.dom 还把 query() 标成返回单个 LockInfo，真实实现给的是 {held, pending}
+      const snap = (await globalThis.navigator!.locks!.query()) as unknown as { held?: { name?: string }[] };
+      const held = (snap.held ?? []).map((h) => h.name ?? "");
+      check("LG: 全程只有一页持有草稿锁", held.filter((n) => n === "z-biz-tool-cpu:draft").length === 1, held.join(","));
+
+      delete (globalThis as any).window;
+    }
+    if (realNav) Object.defineProperty(globalThis, "navigator", realNav);
   }
 
   // AT-01..AT-12 全验收矩阵
