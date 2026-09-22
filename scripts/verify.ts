@@ -478,6 +478,81 @@ loop: out  r0
   check("FIX-05: 缺 root 报错", r3.errors.length > 0 && !r3.design, r3.errors.join("|"));
 }
 
+/* doc 05 §3.3：导入要先过结构、再过引用、再过预算，修掉的必须写进报告 */
+{
+  const { parse, serialize, MAX_COMPS_PER_CIRCUIT, MAX_WIRES_PER_CIRCUIT } = await import("../src/core/serialize.ts");
+  const io = (n: number, type: string, i: number) => ({ id: type + i, type, x: 0, y: i, rot: 0, flip: false, params: { bitWidth: n } });
+
+  // 导出的合法设计原样导回：新加的引用校验不能产生一点噪音
+  let rtCount = 0;
+  let dirty = 0;
+  const roundTrip = (design: any, label: string) => {
+    rtCount++;
+    const r = parse(serialize(design));
+    if (r.errors.length || r.warnings.length) {
+      dirty++;
+      if (dirty <= 5) console.log(`    · ${label}: ${[...r.errors, ...r.warnings].join(" | ")}`);
+    }
+  };
+  for (const lvl of LEVELS) {
+    roundTrip(levelDesign(lvl), `${lvl.id} 骨架`);
+    roundTrip(solutionDesign(lvl), `${lvl.id} 参考解`);
+  }
+  roundTrip(referenceCpu([]).design, "参考 CPU");
+  check(`IVF: ${rtCount} 套设计导出再导入零错误零告警`, dirty === 0, `${dirty} 套产生了报告`);
+
+  // 引脚名对不上号：导线丢弃 + 报告点名，其余导线保留
+  const b = new CircuitBuilder();
+  const src = b.add("input", 0, 0, { bitWidth: 1 });
+  const dst = b.add("output", 5, 0, { bitWidth: 1 });
+  b.connect(src, "out", dst, "in");
+  const bag: any = JSON.parse(serialize({ name: "t", root: b.build(), defs: [] } as Design));
+  bag.design.root.wires.push({ id: "ghost", a: { comp: src, pin: "no-such-pin" }, b: { comp: dst, pin: "in" } });
+  const rp = parse(JSON.stringify(bag));
+  check("IVF: 引脚不存在的导入导线被丢弃", rp.design?.root.wires.length === 1, JSON.stringify(rp.design?.root.wires));
+  check("IVF: 丢掉的引用写进导入报告", rp.warnings.some((w: string) => /no-such-pin/.test(w)), rp.warnings.join(" | "));
+
+  // 子电路实例的对外端口同样要校验（引脚来自 boundary，不是内置 def 表）
+  const add4 = LEVELS.find((l) => l.id === "t2-add4");
+  const sol4 = add4 && solutionDesign(add4);
+  if (sol4) {
+    const bag2: any = JSON.parse(serialize(sol4));
+    const inst = bag2.design.root.comps.find((c: any) => String(c.type).startsWith("custom:"));
+    const w0 = bag2.design.root.wires[0];
+    const before = bag2.design.root.wires.length;
+    bag2.design.root.wires.push({ id: "ghost2", a: { comp: inst.id, pin: "no-such-port" }, b: { comp: w0.b.comp, pin: w0.b.pin } });
+    const rc = parse(JSON.stringify(bag2));
+    check("IVF: 子电路实例的假端口被丢弃", rc.design?.root.wires.length === before, `${before} → ${rc.design?.root.wires.length}`);
+    check("IVF: 假端口报告点名子电路", rc.warnings.some((w: string) => /no-such-port/.test(w)), rc.warnings.join(" | "));
+  }
+
+  // 预算必须覆盖每个电路：以前只查主电路，子电路可以无限塞
+  const fatDef = {
+    name: "x",
+    root: { comps: [], wires: [] },
+    defs: [
+      {
+        id: "d1",
+        name: "胖子",
+        circuit: { comps: Array.from({ length: MAX_COMPS_PER_CIRCUIT + 1 }, (_, i) => io(1, "input", i)), wires: [] },
+      },
+    ],
+  };
+  const rdef = parse(JSON.stringify(fatDef));
+  check("IVF: 子电路元件数受预算约束", rdef.errors.some((e: string) => /子电路 胖子/.test(e) && /上限/.test(e)), rdef.errors.join(" | "));
+
+  const wireJson = (n: number) =>
+    JSON.stringify({
+      name: "x",
+      root: { comps: [io(1, "input", 0), io(1, "output", 1)], wires: Array.from({ length: n }, (_, i) => ({ id: "w" + i, a: { comp: "input0", pin: "out" }, b: { comp: "output1", pin: "in" } })) },
+      defs: [],
+    });
+  const rwire = parse(wireJson(MAX_WIRES_PER_CIRCUIT + 1));
+  check("IVF: 导线预算真的执行（超限拒绝）", rwire.errors.some((e: string) => /导线数/.test(e) && !rwire.design), rwire.errors.join(" | "));
+  const rlim = parse(wireJson(MAX_WIRES_PER_CIRCUIT));
+  check("IVF: 刚好卡在预算上限的设计可导入", rlim.errors.length === 0 && rlim.design?.root.wires.length === MAX_WIRES_PER_CIRCUIT, rlim.errors.join(" | "));
+}
+
 // FIX-08: 判题契约 — 学生输出位宽不足必须判失败
 {
   // 选一个 clear 的位宽契约关：第二层的 ALU（应该有 4 位结果输出）

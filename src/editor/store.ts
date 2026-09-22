@@ -161,6 +161,7 @@ export interface EditorState {
   /** 直接载入一台现成设计（如参考 CPU） */
   loadDesign(design: Design): void;
   newDesign(): void;
+  /** 导入设计；返回给用户的报告（错误 + 导入时修掉的问题），空数组表示原样可用 */
   importText(text: string): string[];
   exportText(): string;
 
@@ -851,7 +852,8 @@ export const useEditor = create<EditorState>((set, get) => {
       if (!res.design) return res.errors.length ? res.errors : ["文件无法解析"];
       set({ levelId: null, mode: "sandbox", selection: { comps: [], wires: [] } });
       replace(res.design, "root");
-      return res.errors;
+      // doc 05 §3.3：导入修掉的引用问题要报给导入者，不能静默丢弃后当作正常工程
+      return res.errors.concat(res.warnings);
     },
     exportText() {
       return serialize(get().design);

@@ -1,3 +1,4 @@
+import { pinProblemOf } from "./custom.ts";
 import { baseDef } from "./registry.ts";
 import type { Circuit, CompInstance, Design, Wire } from "./types.ts";
 
@@ -57,19 +58,30 @@ export function parse(text: string): ParseResult {
   if (!design || !design.root) return { errors: ["缺少 root 电路，可能不是本工具的设计文件"], warnings };
 
   // 数据规模预算
-  const defs = (design.defs ?? []) as unknown[];
-  if (defs.length > MAX_DEFS) {
-    return { errors: [`子电路定义数 ${defs.length} 超过上限 ${MAX_DEFS}`], warnings };
+  const rawDefs = (design.defs ?? []) as unknown[];
+  if (rawDefs.length > MAX_DEFS) {
+    return { errors: [`子电路定义数 ${rawDefs.length} 超过上限 ${MAX_DEFS}`], warnings };
   }
-  const rootComps = ((design.root as { comps?: unknown[] }).comps ?? []) as unknown[];
-  if (rootComps.length > MAX_COMPS_PER_CIRCUIT) {
-    return {
-      errors: [`主电路元件数 ${rootComps.length} 超过上限 ${MAX_COMPS_PER_CIRCUIT}`],
-      warnings,
-    };
+  // 预算要盖住每一个电路：子电路里的海量元件同样会进仿真和渲染，只查主电路等于没查
+  const circuits: { where: string; circuit: Partial<Circuit> | undefined }[] = [
+    { where: "主电路", circuit: design.root },
+    ...rawDefs.map((d, i) => {
+      const def = d as { name?: string; id?: string; circuit?: Partial<Circuit> };
+      return { where: `子电路 ${def?.name || def?.id || i}`, circuit: def?.circuit };
+    }),
+  ];
+  for (const { where, circuit } of circuits) {
+    const comps = (circuit?.comps ?? []) as unknown[];
+    if (comps.length > MAX_COMPS_PER_CIRCUIT) {
+      return { errors: [`${where}元件数 ${comps.length} 超过上限 ${MAX_COMPS_PER_CIRCUIT}`], warnings };
+    }
+    const wires = (circuit?.wires ?? []) as unknown[];
+    if (wires.length > MAX_WIRES_PER_CIRCUIT) {
+      return { errors: [`${where}导线数 ${wires.length} 超过上限 ${MAX_WIRES_PER_CIRCUIT}`], warnings };
+    }
   }
 
-  const known = new Set<string>(defs.map((d) => "custom:" + String((d as { id: unknown }).id ?? "")));
+  const known = new Set<string>(rawDefs.map((d) => "custom:" + String((d as { id: unknown }).id ?? "")));
   const cleaned: Design = {
     name: String(design.name ?? "未命名设计"),
     root: sanitizeCircuit(design.root, known, errors, warnings, "主电路"),
@@ -80,9 +92,38 @@ export function parse(text: string): ParseResult {
     })),
   };
   for (const d of cleaned.defs) known.add("custom:" + d.id);
-  // 后置扫描：禁止循环引用、禁止极端数值
+  // 后置扫描：禁止循环引用、禁止极端数值、引用校验
   checkForNaN(cleaned, errors);
+  checkRefs(cleaned, warnings);
   return { design: cleaned, errors, warnings };
+}
+
+/**
+ * doc 05 §3.3：导入顺序里的「引用校验」。
+ * 导线端点必须落到元件真实存在的引脚上——悬空引脚会让打包子电路等下游流程直接抛错，
+ * 而编辑器内已经用 pinProblem 拦住了这类连线，导入路径不能再放行。
+ * 修不掉的引用丢弃，但必须写进报告（不静默丢弃后当作正常工程保存）。
+ */
+function checkRefs(design: Design, warnings: string[]) {
+  const scan = (circuit: Circuit, where: string) => {
+    if (!circuit.wires.length) return;
+    const byId = new Map(circuit.comps.map((c) => [c.id, c]));
+    const kept: Wire[] = [];
+    for (const w of circuit.wires) {
+      const a = byId.get(w.a.comp);
+      const b = byId.get(w.b.comp);
+      if (!a || !b) continue;
+      const bad = pinProblemOf(design, a, w.a) ?? pinProblemOf(design, b, w.b);
+      if (bad) {
+        warnings.push(`${where}：导线 ${w.a.comp}.${w.a.pin} → ${w.b.comp}.${w.b.pin} 接不上引脚，已忽略（${bad}）`);
+        continue;
+      }
+      kept.push(w);
+    }
+    circuit.wires = kept;
+  };
+  scan(design.root, "主电路");
+  for (const d of design.defs) scan(d.circuit, `子电路 ${d.name}`);
 }
 
 function checkForNaN(design: Design, errors: string[]) {

@@ -144,8 +144,8 @@ export default function Palette() {
               const file = e.target.files?.[0];
               e.target.value = "";
               if (!file) return;
-              const errs = useEditor.getState().importText(await file.text());
-              if (errs.length) window.alert(errs.join("\n"));
+              const report = useEditor.getState().importText(await file.text());
+              if (report.length) window.alert(report.join("\n"));
             }}
           />
         </label>
