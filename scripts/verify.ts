@@ -1017,6 +1017,40 @@ ok:
   check("IMP-13: 删除不存在的版本返回 null", removeVersion(state, "alu", 99) === null);
   check("IMP-13: 删掉中间版后仍保留当前版", removeVersion({ components: [m1, m3] }, "alu", 1)?.components.length === 1);
 
+  // EDT: 导线端点必须落到真实引脚（浏览器实测发现悬空引用会让「打包子电路」直接抛错）
+  const { pinProblem } = await import("../src/core/custom.ts");
+  let dangling = 0;
+  let checkedWires = 0;
+  const scanWires = (design: any, circuit: any, where: string) => {
+    for (const w of circuit?.wires ?? []) {
+      checkedWires++;
+      const msg = pinProblem(design, circuit, w.a) ?? pinProblem(design, circuit, w.b);
+      if (msg) {
+        dangling++;
+        if (dangling <= 5) console.log(`    · ${where}: ${msg}`);
+      }
+    }
+  };
+  const scanDesign = (design: any, label: string) => {
+    if (!design) return;
+    scanWires(design, design.root, `${label}·主电路`);
+    for (const d of design.defs ?? []) scanWires(design, d.circuit, `${label}·${d.name}`);
+  };
+  for (const lvl of LEVELS) {
+    const sk = levelDesign(lvl);
+    scanDesign(sk, `${lvl.id} 骨架`);
+    scanDesign(solutionDesign(lvl), `${lvl.id} 参考解`);
+  }
+  scanDesign(cpu.design, "参考 CPU");
+  check(`EDT: ${checkedWires} 根真实导线端点都能落到引脚`, dangling === 0, `${dangling} 根悬空`);
+  const ghostPin = pinProblem(cpu.design, cpu.design.root, {
+    comp: cpu.design.root.comps[0].id,
+    pin: "no-such-pin",
+  });
+  check("EDT: 不存在的引脚被识别", typeof ghostPin === "string" && /没有引脚/.test(ghostPin ?? ""), String(ghostPin));
+  const ghostComp = pinProblem(cpu.design, cpu.design.root, { comp: "ghost", pin: "out" });
+  check("EDT: 不存在的元件被识别", /不存在/.test(ghostComp ?? ""), String(ghostComp));
+
   // IMP-14: 命中测试 + a11y
   const { buildHitIndex, hitTest, screenToGrid } = await import("../src/editor/hitIndex.ts");
   const { buildA11y, neighbour, describeFocus } = await import("../src/editor/a11y.ts");

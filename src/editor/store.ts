@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { Simulator } from "../core/sim.ts";
 import { CircuitBuilder } from "../core/build.ts";
-import { customCost, defOf, totalCost } from "../core/custom.ts";
+import { customCost, defOf, pinProblem, totalCost } from "../core/custom.ts";
 import { baseDef, defaultParams } from "../core/registry.ts";
 import { cloneDesign, emptyDesign, loadSlot, parse, saveSlot, serialize } from "../core/serialize.ts";
 import type { Circuit, CompInstance, CustomDef, Design, PinRef, Point, Rot, Wire } from "../core/types.ts";
@@ -130,7 +130,8 @@ export interface EditorState {
   startWire(from: PinRef): void;
   finishWire(to: PinRef): void;
   cancelWire(): void;
-  addWire(a: PinRef, b: PinRef, via?: Point[]): void;
+  /** 连线：引脚对不上号或重复连接会被拒绝，返回是否成功 */
+  addWire(a: PinRef, b: PinRef, via?: Point[]): boolean;
   deleteWire(id: string): void;
   addViaOnWire(id: string, at: Point): void;
 
@@ -534,16 +535,22 @@ export const useEditor = create<EditorState>((set, get) => {
     addWire(a, b, via) {
       const st = get();
       const circuit = st.circuit();
+      const bad = pinProblem(st.design, circuit, a) ?? pinProblem(st.design, circuit, b);
+      if (bad) {
+        st.sim.log("@wire", `拒绝连线：${bad}`, "warn");
+        return false;
+      }
       const dup = circuit.wires.some(
         (w) =>
           (w.a.comp === a.comp && w.a.pin === a.pin && w.b.comp === b.comp && w.b.pin === b.pin) ||
           (w.b.comp === a.comp && w.b.pin === a.pin && w.a.comp === b.comp && w.a.pin === b.pin)
       );
-      if (dup) return;
+      if (dup) return false;
       st.pushHistory("连线");
       mutate((c) => {
         c.wires.push({ id: uid("w"), a, b, via });
       }, "连线");
+      return true;
     },
     deleteWire(id) {
       const st = get();
@@ -690,6 +697,15 @@ export const useEditor = create<EditorState>((set, get) => {
       if (!inside.length) return undefined;
       const external = circuit.wires.filter((w) => ids.has(w.a.comp) !== ids.has(w.b.comp));
       if (!external.length) return undefined;
+      // 悬空引脚会让 CircuitBuilder 直接抛错，这里先挡下来并给日志
+      const broken = circuit.wires
+        .filter((w) => ids.has(w.a.comp) || ids.has(w.b.comp))
+        .map((w) => pinProblem(st.design, circuit, w.a) ?? pinProblem(st.design, circuit, w.b))
+        .find((m): m is string => !!m);
+      if (broken) {
+        st.sim.log("@group", `打包中止：${broken}`, "error");
+        return undefined;
+      }
 
       const defId = uid("d");
       const b = new CircuitBuilder();

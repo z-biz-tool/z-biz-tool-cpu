@@ -1,5 +1,5 @@
 import { baseDef, resolveDef } from "./registry.ts";
-import type { CompDef, Circuit, CustomDef, Design, PinSpec } from "./types.ts";
+import type { CompDef, Circuit, CustomDef, Design, PinRef, PinSpec } from "./types.ts";
 
 /* ------------------------------------------------------------------ *
  * 自定义子电路：把 def 的 INPUT/OUTPUT 元件映射成对外引脚
@@ -139,6 +139,19 @@ export function defOf(design: Design, type: string, params: Record<string, numbe
 /** 列出可作为元件库条目的自定义电路 */
 export function customTypes(design: Design): string[] {
   return design.defs.map((d) => "custom:" + d.id);
+}
+
+/**
+ * 校验导线端点能否落到真实引脚，返回问题描述（没问题返回 null）。
+ * 未知元件类型不判定（FIX-05 已单独给警告），只拦确实对不上号的引用，
+ * 因为悬空引脚会让打包子电路等下游流程直接抛错。
+ */
+export function pinProblem(design: Design, circuit: Circuit, ref: PinRef): string | null {
+  const inst = circuit.comps.find((c) => c.id === ref.comp);
+  if (!inst) return `元件 ${ref.comp} 不存在`;
+  const def = defOf(design, inst.type, inst.params ?? {});
+  if (!def) return null;
+  return def.pins.some((p) => p.id === ref.pin) ? null : `${inst.type} 没有引脚 ${ref.pin}`;
 }
 
 export function findDef(design: Design, defId: string): CustomDef | undefined {
