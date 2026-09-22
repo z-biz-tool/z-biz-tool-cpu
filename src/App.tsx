@@ -8,6 +8,8 @@ import Toolbar from "./editor/Toolbar.tsx";
 import AsmPanel from "./editor/panels/AsmPanel.tsx";
 import ChallengePanel from "./editor/panels/ChallengePanel.tsx";
 import CpuPanel from "./editor/panels/CpuPanel.tsx";
+import WorkshopPanel from "./editor/panels/WorkshopPanel.tsx";
+import { emptyWorkshop } from "./workshop/index.ts";
 import { HelpPanel, LogPanel, ProbePanel } from "./editor/panels/WatchPanels.tsx";
 import { useEditor } from "./editor/store.ts";
 import type { PanelKey } from "./editor/store.ts";
@@ -21,6 +23,7 @@ const TABS: { key: PanelKey; label: string; render: () => React.ReactNode }[] = 
   { key: "inspector", label: "属性", render: () => <Inspector /> },
   { key: "asm", label: "汇编", render: () => <AsmPanel /> },
   { key: "cpu", label: "CPU", render: () => <CpuPanel /> },
+  { key: "workshop", label: "工坊", render: () => <WorkshopPanel state={emptyWorkshop()} onChange={() => {}} /> },
   { key: "probe", label: "探针", render: () => <ProbePanel /> },
   { key: "log", label: "日志", render: () => <LogPanel /> },
   { key: "help", label: "手册", render: () => <HelpPanel /> },

@@ -7,6 +7,7 @@ import { programImage, runProgram } from "../../cpu/run.ts";
 import type { CpuRun } from "../../cpu/run.ts";
 import { assemble } from "../../asm/assembler.ts";
 import { useEditor } from "../store.ts";
+import AdapterWizard from "./AdapterWizard.tsx";
 
 /* ------------------------------------------------------------------ *
  * CPU 视图：在参考 CPU 上跑汇编程序，逐拍查看内部状态
@@ -68,6 +69,7 @@ export default function CpuPanel() {
   const [errors, setErrors] = useState<string[]>([]);
   const [snap, setSnap] = useState<Snapshot | null>(null);
   const [auto, setAuto] = useState(false);
+  const [showWizard, setShowWizard] = useState(false);
   const prints = useRef<string[]>([]);
 
   const load = () => {
@@ -138,6 +140,12 @@ export default function CpuPanel() {
       <div className="asm-actions">
         <Button size="small" type="primary" onClick={load}>
           装载程序
+        </Button>
+        <Button
+          size="small"
+          onClick={() => setShowWizard((s) => !s)}
+        >
+          {showWizard ? "隐藏绑定向导" : "CPU 适配器"}
         </Button>
         <Tooltip title="单拍执行，看看 PC / IR / 控制字怎么变">
           <Button size="small" disabled={!run || snap?.done} onClick={() => advance(1)}>
@@ -254,6 +262,16 @@ export default function CpuPanel() {
           </div>
           {snap.unstable && <Alert type="warning" showIcon message="组合逻辑未收敛，可能存在环路" />}
         </>
+      )}
+
+      {showWizard && (
+        <div style={{ marginTop: 12, padding: 8, background: "rgba(167,139,250,0.08)", borderRadius: 6 }}>
+          <AdapterWizard
+            sim={run ? run.sim : undefined}
+            onApply={(a) => console.log("[adapter] saved", a.id)}
+            current={null}
+          />
+        </div>
       )}
 
       <div className="asm-actions">

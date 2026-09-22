@@ -507,6 +507,9 @@ const T2: Level[] = [
       { inputs: { D: 0x07, P: 0 }, outputs: { BAD: 1 } },
       { inputs: { D: 0xff, P: 0 }, outputs: { BAD: 0 } },
       { inputs: { D: 0xfe, P: 0 }, outputs: { BAD: 1 } },
+      // doc 03 §7 反例：偶数比特翻转漏检 — 单比特 XOR 校验无法检出
+      { name: "偶数比特翻转漏检（已知的限制）", inputs: { D: 0x03, P: 0 }, outputs: { BAD: 0 } },
+      { name: "双比特翻转漏检（已知的限制）", inputs: { D: 0x0f, P: 0 }, outputs: { BAD: 0 } },
     ],
   },
 ];
@@ -1006,6 +1009,19 @@ const T4: Level[] = [
         log: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].join(","),
         outputs: { DONE: 1 },
       },
+      // doc 03 §6.4 变式：验证中间状态——15 步时应已看到第一个输出（3 条 LDI 各 3 拍 + add 2 拍 + out 2 拍 = 11 拍）
+      {
+        name: "部分输出：第 15 拍已出现 1",
+        steps: 15,
+        log: "1",
+        outputs: { DONE: 0 },
+      },
+      // doc 03 §6.4 边界：步数不足不应报告 DONE
+      {
+        name: "步数不足时 DONE 仍为 0",
+        steps: 5,
+        outputs: { DONE: 0 },
+      },
     ],
     hint: "DONE 用来表示「已经 HLT」：译出 SYS/HLT 后拉高，同时停掉 PC 计数。",
   },
@@ -1151,6 +1167,14 @@ const T5: Level[] = [
       { inputs: { ST: 4 }, outputs: { PC_EN: 1, MEM_WE: 1, ALU_OP: 4, RF_LD: 1, HALT: 0 } },
       { inputs: { ST: 6 }, outputs: { PC_EN: 1, MEM_WE: 0, ALU_OP: 0, RF_LD: 0, HALT: 1 } },
       { inputs: { ST: 7 }, outputs: { PC_EN: 0, MEM_WE: 0, ALU_OP: 0, RF_LD: 0, HALT: 0 } },
+      // doc 03 §7 关键约束：CTRL 输出原始位域；当 HALT 和 PC_EN 同时为 1（ST=6）时，
+      // 哪一个先生效由外部组合逻辑决定；本工具的参考 CPU 把 HALT 放在 OR 链末端
+      // 实现「停机后停掉所有写」，但这一约定不属于关卡契约
+      {
+        name: "doc 03 §7：HALT 与 PC_EN 同时为 1 时由使用方决定",
+        inputs: { ST: 6 },
+        outputs: { PC_EN: 1, HALT: 1 },
+      },
     ],
   },
 ];

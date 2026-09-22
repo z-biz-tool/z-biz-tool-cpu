@@ -212,10 +212,24 @@ export function assemblesSample(key: string): string {
 }
 
 /** 把汇编结果写入 RAM 元件的 params.data（按绝对地址对齐） */
-export function applyProgram(sim: Simulator, compId: string, res: AsmResult, clear = false): boolean {
+export function applyProgram(sim: Simulator, compId: string, res: AsmResult, clear = false): { ok: boolean; reason?: string } {
   const comp = sim.compById(compId);
-  if (!comp) return false;
+  if (!comp) return { ok: false, reason: `找不到 RAM 元件 ${compId}` };
   const depth = 2 ** (Number(comp.inst.params.addrBits) || 8);
+  const bits = Math.max(1, Number(comp.inst.params.bitWidth) || 16);
+  // doc 04 §6.2：装载前先按地址范围校验；越界 / 位宽不匹配拒绝，不静默丢弃尾部
+  for (let i = 0; i < res.words.length; i++) {
+    const addr = res.base + i;
+    if (addr < 0 || addr >= depth) {
+      return { ok: false, reason: `装载地址 0x${addr.toString(16)} 超出 RAM 范围 [0..${depth - 1}]` };
+    }
+    // 用无符号掩码（>>> 0）防 JavaScript 位运算溢出
+    const mask = bits >= 32 ? 0xffffffff : ((1 << bits) - 1) >>> 0;
+    const orig = (res.words[i] | 0) >>> 0;
+    if ((orig & mask) !== orig) {
+      return { ok: false, reason: `字 0x${orig.toString(16)} 位宽超过 RAM ${bits} 位` };
+    }
+  }
   const current = clear ? new Array<number>(depth).fill(0) : sim.readMemory(compId).slice();
   while (current.length < depth) current.push(0);
   res.words.forEach((w, i) => {
@@ -223,5 +237,11 @@ export function applyProgram(sim: Simulator, compId: string, res: AsmResult, cle
     if (addr >= 0 && addr < depth) current[addr] = w;
   });
   sim.writeMemory(compId, current);
-  return true;
+  return { ok: true };
+}
+
+/** 显式装载函数：直接接受地址数组，绕开 assemble 的 .org 处理
+ *  用于 doc 04 §6.2 验证：装载越界 / 位宽超限返回 {ok: false, reason} */
+export function loadProgramDirect(sim: Simulator, compId: string, words: number[], baseAddr: number): { ok: boolean; reason?: string } {
+  return applyProgram(sim, compId, { words, base: baseAddr, errors: [], symbols: {}, listing: [] } as AsmResult, true);
 }

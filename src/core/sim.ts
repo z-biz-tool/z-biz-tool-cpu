@@ -49,6 +49,18 @@ export class Simulator {
   /** FIX-07: 信号轨迹（最近 N 拍变化量）；启用后 step/run 会同步采集 */
   readonly trace: TraceStore = new TraceStore("sim-0");
 
+  /** IMP-09: 自动 checkpoint 缓冲（每 CHECKPOINT_INTERVAL 拍创建一个） */
+  private checkpoints: SimSnapshot[] = [];
+  private readonly checkpointTicks = new Set<number>();
+  private lastCheckpointTick = 0;
+  /** checkpoint 取自哪个仿真实例（用于 restore 时拒绝跨实例） */
+  private readonly checkpointSessionId = "sim-0";
+
+  /** IMP-09: 列出所有自动 checkpoint 的 tick 序号 */
+  checkpointList(): number[] {
+    return this.checkpoints.map((s) => s.time);
+  }
+
   constructor(design: Design, circuit: Circuit) {
     this.design = design;
     this.circuit = circuit;
@@ -96,6 +108,8 @@ export class Simulator {
     });
     // FIX-07: 采样本拍结束时的已命名元件值；同 tick 内 delta=1
     this.captureTraceEndOfTick();
+    // IMP-09: 每 CHECKPOINT_INTERVAL 拍创建一个自动 checkpoint
+    this.maybeCheckpoint();
     return true;
   }
 
@@ -180,6 +194,7 @@ export class Simulator {
     for (let i = 0; i < this.nl.nets.length; i++) netValues[i] = this.nl.nets[i].value;
     return {
       format: SNAPSHOT_FORMAT,
+      sessionId: this.checkpointSessionId,
       netHash: this.nl.comps.length ^ this.nl.nets.length,
       time: this.time,
       logs: this.logs.slice(),
@@ -194,6 +209,7 @@ export class Simulator {
   restore(snap: SimSnapshot): boolean {
     if (snap.format !== SNAPSHOT_FORMAT) return false;
     if (snap.netHash !== (this.nl.comps.length ^ this.nl.nets.length)) return false;
+    if (snap.sessionId && snap.sessionId !== this.checkpointSessionId) return false;
     this.time = snap.time;
     this.logs = snap.logs.slice();
     this.prevClk = snap.prevClk.slice();
@@ -217,6 +233,48 @@ export class Simulator {
     return true;
   }
 
+  /** IMP-09: 自动 checkpoint — 每 CHECKPOINT_INTERVAL 拍创建一个快照，最多保留 CHECKPOINT_MAX 个 */
+  private maybeCheckpoint() {
+    if (this.time - this.lastCheckpointTick < CHECKPOINT_INTERVAL) return;
+    if (this.checkpointTicks.has(this.time)) return;
+    const snap = this.snapshot();
+    this.checkpoints.push(snap);
+    this.checkpointTicks.add(this.time);
+    this.lastCheckpointTick = this.time;
+    if (this.checkpoints.length > CHECKPOINT_MAX) {
+      const dropped = this.checkpoints.shift();
+      if (dropped) this.checkpointTicks.delete(dropped.time);
+    }
+  }
+
+  /** IMP-09: 按 tick 查找最近的 checkpoint；找不到则返回 undefined */
+  findCheckpoint(targetTick: number): SimSnapshot | undefined {
+    let best: SimSnapshot | undefined;
+    let bestDelta = Infinity;
+    for (const s of this.checkpoints) {
+      const d = Math.abs(s.time - targetTick);
+      if (d <= bestDelta) {
+        best = s;
+        bestDelta = d;
+      }
+    }
+    return best;
+  }
+
+  /** IMP-09: 恢复到指定 tick 之前最近的 checkpoint；找不到则保持现状并返回 false */
+  restoreToTick(targetTick: number): boolean {
+    const snap = this.findCheckpoint(targetTick);
+    if (!snap) return false;
+    return this.restore(snap);
+  }
+
+  /** IMP-09: 清空所有自动 checkpoint（保留手动 snapshot() 的结果） */
+  clearCheckpoints() {
+    this.checkpoints = [];
+    this.checkpointTicks.clear();
+    this.lastCheckpointTick = 0;
+  }
+
   reset() {
     for (const c of this.nl.comps) {
       // 就地清空：EvalCtx.s 持有该对象引用，不能整体替换
@@ -228,6 +286,7 @@ export class Simulator {
     this.time = 0;
     this.unstable = false;
     this.logs = [];
+    this.clearCheckpoints();
     this.settle();
   }
 
@@ -377,10 +436,16 @@ export class Simulator {
       this.queue.push(i);
       this.inq[i] = 1;
     }
+    // IMP-04: 仅在逼近预算时才检测振荡，避免正常求值被误报
+    const recentHashes: number[] = [];
+    const HASH_WINDOW = 4;
+    const OSCILLATION_PROBE = Math.floor(MAX_PASSES * 0.75);
     let passes = 0;
+    let oscillated = false;
+    let budgetExhausted = false;
     while (this.head < this.queue.length) {
       if (++passes > MAX_PASSES) {
-        this.unstable = true;
+        budgetExhausted = true;
         break;
       }
       const ci = this.queue[this.head++];
@@ -398,8 +463,46 @@ export class Simulator {
           this.log(comp.id, `${comp.def.label}: ${(e as Error).message}`, "error");
         }
       }
+      // 仅当逼近预算上限才开始状态指纹采样，避免给正常求值加额外开销
+      if (passes > OSCILLATION_PROBE) {
+        const h = this.hashState();
+        recentHashes.push(h);
+        if (recentHashes.length > HASH_WINDOW) recentHashes.shift();
+        if (recentHashes.length === HASH_WINDOW && recentHashes[0] === recentHashes[2] && recentHashes[1] === recentHashes[3]) {
+          oscillated = true;
+          break;
+        }
+      }
     }
+    if (oscillated || budgetExhausted) this.unstable = true;
     this.settling = false;
+    if (oscillated) {
+      this.log("@settle", "检测到状态在最近迭代中重复：判定为振荡 (NON_CONVERGENT)", "warn");
+    } else if (budgetExhausted) {
+      this.log("@settle", "组合迭代达预算上限：RESOURCE_LIMIT（无证据判定振荡）", "warn");
+    }
+  }
+
+  /** IMP-04: 取所有网络值与已命名器件状态哈希，用于检测周期 */
+  hashState(): number {
+    let h = 2166136261 >>> 0;
+    const nets = this.nl.nets;
+    for (let i = 0; i < nets.length; i++) {
+      const v = nets[i].value | 0;
+      h ^= v;
+      h = Math.imul(h, 16777619) >>> 0;
+    }
+    for (const c of this.nl.comps) {
+      if (c.boundary) continue;
+      for (const k of Object.keys(c.state)) {
+        const v = c.state[k];
+        if (typeof v === "number") {
+          h ^= v + k.charCodeAt(0);
+          h = Math.imul(h, 16777619) >>> 0;
+        }
+      }
+    }
+    return h >>> 0;
   }
 
   private clkValue(ci: number): number {
@@ -487,8 +590,15 @@ export class Simulator {
 /** FIX-04: 快照 — 必须深拷贝可变数组（特别是 RAM 的 _mem），后续写入不能污染历史 */
 const SNAPSHOT_FORMAT = "sim-snapshot/1";
 
+/** IMP-09: 每 100 拍创建一个自动 checkpoint */
+export const CHECKPOINT_INTERVAL = 100;
+/** IMP-09: 自动 checkpoint 最多保留 100 个（FIFO 淘汰最旧） */
+export const CHECKPOINT_MAX = 100;
+
 export interface SimSnapshot {
   format: string;
+  /** 仿真器 session 标识；跨实例恢复时拒绝 */
+  sessionId?: string;
   /** 取自当时设计的 netlist 拓扑哈希（当前不计算，逐版本追踪用） */
   netHash: number;
   time: number;

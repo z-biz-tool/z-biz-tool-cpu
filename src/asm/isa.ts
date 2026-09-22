@@ -15,6 +15,9 @@ export const REG_LR = 7;
 export const PORT_OUT = 0xf0;
 export const PORT_IN = 0xf1;
 
+/** IMP-05: ISA 显式版本号 — 序列化项目、课程与判题都使用该字符串识别 ISA 语义 */
+export const ISA_VERSION = "z16/1.1";
+
 export const OP = {
   NOP: 0x0,
   MOV: 0x1,
@@ -33,6 +36,24 @@ export const OP = {
   JMP: 0xe,
   SYS: 0xf,
 } as const;
+
+/** IMP-05: 各标志位在指令执行后的写入策略 */
+export interface FlagPolicy {
+  z: boolean;
+  c: boolean;
+  n: boolean;
+}
+
+/** IMP-05: 按操作码给出标志位写入策略；与汇编器、参考 CPU、解释器共用 */
+export const FLAG_POLICY: Record<number, FlagPolicy> = {
+  [OP.ADD]: { z: true, c: true, n: true },
+  [OP.SUB]: { z: true, c: true, n: true },
+  [OP.AND]: { z: true, c: false, n: true },
+  [OP.OR]: { z: true, c: false, n: true },
+  [OP.XOR]: { z: true, c: false, n: true },
+  [OP.NOT]: { z: true, c: false, n: true },
+  [OP.CMP]: { z: true, c: true, n: true },
+};
 
 /** 跳转条件（JMP 的 B 字段） */
 export const COND = {

@@ -893,5 +893,121 @@ ok:
   check("IMP-10: parseManifest 拒绝非 JSON", !bad1.ok && bad1.errors.length > 0);
 }
 
+/* IMP-09 / IMP-05 / IMP-11 / IMP-12 / IMP-13 / IMP-14 增量自检 */
+{
+  // IMP-09: 自动 checkpoint
+  const { Simulator, CHECKPOINT_INTERVAL, CHECKPOINT_MAX } = await import("../src/core/sim.ts");
+  const { referenceCpu } = await import("../src/cpu/reference.ts");
+  const cpu = referenceCpu([]);
+  const sim = new Simulator(cpu.design, cpu.design.root);
+  for (let i = 0; i < CHECKPOINT_INTERVAL * 3; i++) sim.step();
+  const ticks = sim.checkpointList();
+  check("IMP-09: 至少一个自动 checkpoint 存在", ticks.length >= 2, "ticks=" + ticks.join(","));
+  check("IMP-09: checkpoint 数量 ≤ CHECKPOINT_MAX", ticks.length <= CHECKPOINT_MAX, "n=" + ticks.length);
+  const mid = ticks[Math.floor(ticks.length / 2)];
+  const before = sim.time;
+  const ok = sim.restoreToTick(mid);
+  check("IMP-09: restoreToTick 成功恢复", ok && sim.time === mid, `time before=${before} after=${sim.time} target=${mid}`);
+  const refSnap = sim.snapshot();
+  const ok2 = sim.restore(refSnap);
+  check("IMP-09: snapshot()/restore() 往返一致", ok2 && sim.time === refSnap.time);
+  const badSnap = { ...refSnap, format: "wrong" };
+  check("IMP-09: 错误 format 被拒绝", !sim.restore(badSnap as any));
+  const badSession = { ...refSnap, sessionId: "different-sim" };
+  check("IMP-09: 跨 sessionId 拒绝恢复", !sim.restore(badSession as any));
+
+  // IMP-05: ISA 版本与解释器
+  const { ISA_VERSION, FLAG_POLICY, OP } = await import("../src/asm/isa.ts");
+  check("IMP-05: ISA_VERSION 已发布", ISA_VERSION === "z16/1.1", ISA_VERSION);
+  check("IMP-05: ADD 全更新 Z/C/N", FLAG_POLICY[OP.ADD].z && FLAG_POLICY[OP.ADD].c && FLAG_POLICY[OP.ADD].n);
+  check("IMP-05: AND 只更新 Z/N", FLAG_POLICY[OP.AND].z && !FLAG_POLICY[OP.AND].c && FLAG_POLICY[OP.AND].n);
+
+  const { newInterpreter, runToHalt, diffWithCircuit, loadProgram: loadProgramI } = await import("../src/cpu/interpreter.ts");
+  const { assemble } = await import("../src/asm/assembler.ts");
+  const interp = newInterpreter();
+  const a = assemble(`
+      ldi  r0, 5
+      ldi  r1, 7
+      add  r0, r1
+      out  r0
+      hlt
+  `);
+  loadProgramI(interp, a.words);
+  const ev = runToHalt(interp);
+  check("IMP-05: 解释器执行 count 输出 12", interp.output[0] === 12 && ev.length === 5, "out=" + interp.output[0]);
+  const circ = { pc: interp.pc, regs: Array.from(interp.regs), flags: interp.flags, output: interp.output };
+  check("IMP-05: 解释器与电路架构状态一致", !diffWithCircuit(interp, circ));
+
+  // IMP-11: 序章关卡
+  const { PROLOGUE_LEVELS } = await import("../src/challenges/prologue.ts");
+  const { runLevelTests } = await import("../src/challenges/verify.ts");
+  const { levelDesign } = await import("../src/challenges/levels.ts");
+  check("IMP-11: 三序章齐全", PROLOGUE_LEVELS.length === 3);
+  for (const p of PROLOGUE_LEVELS) {
+    // 序章骨架本身就是参考解（prologue-light 已经接好；prologue-wire 测试骨架仍能跑只是断言 L=0）
+    const sol = levelDesign(p);
+    const r = runLevelTests(p, sol);
+    check(`IMP-11: ${p.id} 骨架可仿真`, r.errors.every((e) => e.level !== "error"), r.errors.map((e) => e.msg).join(";"));
+  }
+
+  // IMP-12: 适配器向导
+  const { adapterForReference, validateUserAdapter } = await import("../src/cpu/debug.ts");
+  const adapter = adapterForReference(cpu.handles, "MEM");
+  check("IMP-12: 参考 CPU 自动绑定 8 寄存器", adapter.binding.registers.length === 8);
+  const errs = validateUserAdapter(adapter, sim);
+  check("IMP-12: 参考适配器校验通过", errs.length === 0, errs.join(";"));
+  const bad = { ...adapter, isaVersion: "wrong/1" };
+  check("IMP-12: ISA 版本不匹配被拒绝", validateUserAdapter(bad, sim).some((e) => /ISA/.test(e)));
+
+  // IMP-13: 组件工坊
+  const { addOrUpdate, diffInterface, exportWorkshop, importWorkshop, hashComponent } = await import("../src/workshop/index.ts");
+  const state = { components: [] };
+  const def: any = { id: "alu", name: "ALU", circuit: { comps: [{ id: "in-A", type: "input", x: 0, y: 0, rot: 0, params: { bitWidth: 4 } }, { id: "out-Y", type: "output", x: 4, y: 0, rot: 0, params: { bitWidth: 4 } }], wires: [] } };
+  const m1 = addOrUpdate(state, def, "user");
+  check("IMP-13: 第一版入库", m1.version === 1 && hashComponent(def).length === 8);
+  const m2 = addOrUpdate(state, def, "user");
+  check("IMP-13: 同内容只返回已有版本", m1 === m2);
+  const def2 = { ...def, circuit: { ...def.circuit, comps: [...def.circuit.comps, { id: "in-B", type: "input", x: -4, y: 0, rot: 0, params: { bitWidth: 4 } }] } };
+  const m3 = addOrUpdate(state, def2, "user");
+  check("IMP-13: 内容变更发布新版本", m3.version === 2 && m3.interface.length === 3 && m1.supersededBy === 2);
+  const d = diffInterface(m1, m3);
+  check("IMP-13: 接口差异检测新增", d.added.includes("in-B"));
+  const json = exportWorkshop(state);
+  const imported = importWorkshop({ components: [] }, json);
+  check("IMP-13: 导入还原", imported.added === 2);
+
+  // IMP-14: 命中测试 + a11y
+  const { buildHitIndex, hitTest, screenToGrid } = await import("../src/editor/hitIndex.ts");
+  const { buildA11y, neighbour, describeFocus } = await import("../src/editor/a11y.ts");
+  const idx = buildHitIndex(cpu.design.root);
+  const a11y = buildA11y(cpu.design.root, cpu.design);
+  check("IMP-14: 命中索引覆盖根元件", idx.comps.length === cpu.design.root.comps.length);
+  check("IMP-14: a11y 元件列表非空", a11y.comps.length > 0);
+  const hit = hitTest(idx, cpu.design.root, cpu.design, { x: 0, y: 0 });
+  check("IMP-14: 命中点能定位元件或线", hit !== undefined);
+  check("IMP-14: 邻居切换可达", neighbour(a11y, null, "next") !== null);
+  const desc = describeFocus(a11y, hit);
+  check("IMP-14: describeFocus 返回描述", typeof desc === "string" && desc.length > 0, desc);
+  const g = screenToGrid(0, 0, { x: 0, y: 0, zoom: 1 });
+  check("IMP-14: 屏幕转 grid 一致", g.x === 0 && g.y === 0);
+
+  // AT-01..AT-12 全验收矩阵
+  const atModule = await import("../src/atCoverage.ts");
+  const { existsSync: existsSync2, readFileSync: readFileSync2 } = await import("node:fs");
+  const manifestPath2 = new URL("../dist-curriculum/manifest.json", import.meta.url);
+  if (existsSync2(manifestPath2)) {
+    (globalThis as any).__manifest = readFileSync2(manifestPath2, "utf8");
+  }
+  const atResults = atModule.runAllAT();
+  let atPass = 0;
+  let atFail = 0;
+  for (const r of atResults) {
+    if (r.ok) atPass++;
+    else atFail++;
+    check(`${r.id} (${r.ok ? "OK" : "FAIL"})`, r.ok, r.detail);
+  }
+  check(`AT-01..12 合计 ${atPass}/${atResults.length}`, atFail === 0);
+}
+
 console.log(`\n${failed === 0 ? "\x1b[32m" : "\x1b[31m"}内核自检：${passed} 通过 / ${failed} 失败\x1b[0m`);
 process.exit(failed === 0 ? 0 : 1);

@@ -48,7 +48,7 @@ interface Snapshot {
   label: string;
 }
 
-export type PanelKey = "inspector" | "level" | "asm" | "cpu" | "probe" | "log" | "help";
+export type PanelKey = "inspector" | "level" | "asm" | "cpu" | "probe" | "log" | "help" | "workshop";
 
 export interface EditorState {
   design: Design;
