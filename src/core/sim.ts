@@ -26,6 +26,11 @@ export interface Probe {
 }
 
 const MAX_PASSES = 4000;
+/**
+ * 每次 settle 都会把全部元件排一次队，所以预算必须随规模放大：
+ * 否则一单纯组合的大型设计光是「排队求值」就会超预算，被误判成不收敛。
+ */
+const PASSES_PER_COMP = 8;
 
 /**
  * doc 02 §5.2：把「不收敛」拆成有证据的振荡与仅命中预算两种状态，
@@ -536,14 +541,15 @@ export class Simulator {
       this.inq[i] = 1;
     }
     // IMP-04: 仅在逼近预算时才检测振荡，避免正常求值被误报
+    const budget = Math.max(MAX_PASSES, comps.length * PASSES_PER_COMP);
     const recentHashes: number[] = [];
     const HASH_WINDOW = 4;
-    const OSCILLATION_PROBE = Math.floor(MAX_PASSES * 0.75);
+    const OSCILLATION_PROBE = Math.floor(budget * 0.75);
     let passes = 0;
     let oscillated = false;
     let budgetExhausted = false;
     while (this.head < this.queue.length) {
-      if (++passes > MAX_PASSES) {
+      if (++passes > budget) {
         budgetExhausted = true;
         break;
       }

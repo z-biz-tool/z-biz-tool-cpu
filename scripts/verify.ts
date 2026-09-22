@@ -1076,6 +1076,38 @@ ok:
     check("RS: 反馈环路判定为振荡 NON_CONVERGENT", ringSim.settleOutcome === "oscillating" && ringSim.unstable, ringSim.settleOutcome);
     check("RS: 振荡提示优先于运行中", ringSim.runState(true).code === "oscillating", ringSim.runState(true).code);
 
+    // 预算必须随规模放大：纯组合大电路没有任何反馈，绝不能被判成振荡
+    const wide = new CircuitBuilder();
+    const wsrc = wide.add("input", 0, 0, { bitWidth: 1 });
+    let wprev = wsrc;
+    for (let i = 0; i < 4500; i++) {
+      const buf = wide.add("buf", i, 0);
+      wide.connect(wprev, "out", buf, "i0");
+      wprev = buf;
+    }
+    const wtail = wide.add("output", 5000, 0, { bitWidth: 1 });
+    wide.connect(wprev, "out", wtail, "in");
+    const wideSim = mkSim(wide.build());
+    wideSim.setInput(wsrc, 1);
+    check(
+      "RS: 4500 级无反馈直链判为已收敛（旧预算会误称振荡）",
+      wideSim.settleOutcome === "converged" && out(wideSim, wtail) === 1,
+      `${wideSim.settleOutcome} 末端=${out(wideSim, wtail)}`
+    );
+
+    // 周期超出指纹窗口时只有预算证据，不许编造振荡结论
+    const oddRing = new CircuitBuilder();
+    const nots: string[] = [];
+    for (let i = 0; i < 5; i++) nots.push(oddRing.add("not", i, 0));
+    for (let i = 0; i < 5; i++) oddRing.connect(nots[i], "out", nots[(i + 1) % 5], "i0");
+    const oddSim = mkSim(oddRing.build());
+    check("RS: 周期超出指纹窗口 → RESOURCE_LIMIT", oddSim.settleOutcome === "resource-limit", oddSim.settleOutcome);
+    check(
+      "RS: 该判定的日志如实说明无证据",
+      oddSim.logs.some((l) => /RESOURCE_LIMIT（无证据判定振荡）/.test(l.msg)) &&
+        !oddSim.logs.some((l) => /判定为振荡 \(NON_CONVERGENT\)/.test(l.msg))
+    );
+
     // HALTED：DONE 拉高后即使还在运行也要如实报停机
     const haltB = new CircuitBuilder();
     const hsrc = haltB.add("input", 0, 0, { bitWidth: 1 });
