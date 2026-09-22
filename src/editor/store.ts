@@ -14,6 +14,8 @@ import type { Badge, Progress } from "../challenges/progress.ts";
 import { assemble } from "../asm/assembler.ts";
 import type { AsmResult, ListingLine } from "../asm/assembler.ts";
 import { assemblesSample } from "../asm/samples.ts";
+import type { WorkshopState } from "../workshop/index.ts";
+import { addOrUpdate, findComponent, loadWorkshopLocal, removeVersion, saveWorkshopLocal } from "../workshop/index.ts";
 
 /* ------------------------------------------------------------------ *
  * 编辑器状态中枢：设计数据 + 仿真器 + 视图 + 关卡 + 汇编
@@ -86,6 +88,8 @@ export interface EditorState {
   asmErrors: string[];
   asmWords: number[];
   asmListing: ListingLine[];
+  /** IMP-13：作品工坊（本地持久化） */
+  workshop: WorkshopState;
 
   circuit(): Circuit;
   isRoot(): boolean;
@@ -168,6 +172,15 @@ export interface EditorState {
   assembleNow(): AsmResult;
   loadProgramToTarget(): boolean;
   useSample(name: string): void;
+
+  /** IMP-13: 把子电路登记进作品工坊并落盘；返回是否产生了新版本 */
+  publishToWorkshop(def: CustomDef, source?: "user" | "course" | "imported"): boolean;
+  /** 覆盖工坊状态（导入备份用），自动写本地存储 */
+  replaceWorkshop(next: WorkshopState): void;
+  /** 删除某个组件版本；同 id 若还有更早版本则把它恢复为「当前」 */
+  removeWorkshopVersion(id: string, version: number): void;
+  /** 把工坊组件放到画布中心；当前设计缺少该子电路时先登记 */
+  useWorkshopComponent(id: string, version?: number): boolean;
 }
 
 function currentCircuit(design: Design, view: string): Circuit {
@@ -189,6 +202,7 @@ const pinKey = (ref: PinRef) => ref.comp + "." + ref.pin;
 export const useEditor = create<EditorState>((set, get) => {
   const initialDesign = loadSlot("autosave") ?? emptyDesign("自由搭建");
   const initialProgress = loadProgress();
+  const initialWorkshop = loadWorkshopLocal();
   let sim = new Simulator(initialDesign, currentCircuit(initialDesign, "root"));
 
   /** 结构变更后统一入口：换新 design 引用 → 重建仿真器 → 自动存档 */
@@ -255,6 +269,7 @@ export const useEditor = create<EditorState>((set, get) => {
     asmErrors: [],
     asmWords: [],
     asmListing: [],
+    workshop: initialWorkshop,
 
     circuit() {
       const st = get();
@@ -758,6 +773,8 @@ export const useEditor = create<EditorState>((set, get) => {
       target.wires = kept;
       set({ design });
       after("打包子电路", false);
+      // IMP-13: 封装即入工坊（内容变化会自动升版本）
+      get().publishToWorkshop(def);
       set({ selection: { comps: [newId], wires: [] } });
       return defId;
     },
@@ -900,6 +917,44 @@ export const useEditor = create<EditorState>((set, get) => {
     useSample(name) {
       set({ asmSource: assemblesSample(name) });
       get().assembleNow();
+    },
+
+    publishToWorkshop(def, source = "user") {
+      const cur = get().workshop;
+      // addOrUpdate 会就地写 prev.supersededBy，这里先浅拷贝避免污染旧 state
+      const draft: WorkshopState = { components: cur.components.map((c) => ({ ...c })) };
+      const before = new Set(cur.components.map((c) => `${c.id}#${c.version}`));
+      const manifest = addOrUpdate(draft, def, source);
+      saveWorkshopLocal(draft);
+      set({ workshop: draft });
+      return !before.has(`${manifest.id}#${manifest.version}`);
+    },
+    replaceWorkshop(next) {
+      saveWorkshopLocal(next);
+      set({ workshop: next });
+    },
+    removeWorkshopVersion(id, version) {
+      const draft = removeVersion(get().workshop, id, version);
+      if (!draft) return;
+      saveWorkshopLocal(draft);
+      set({ workshop: draft });
+    },
+    useWorkshopComponent(id, version) {
+      const st = get();
+      const manifest = findComponent(st.workshop, id, version);
+      if (!manifest) return false;
+      if (st.view === manifest.id) return false; // 不能把自己放进自己的子电路里
+      if (!st.design.defs.some((d) => d.id === manifest.id)) {
+        // 当前设计里没有这枚子电路：先从工坊登记一份（深拷贝，避免共享引用）
+        const def = JSON.parse(JSON.stringify(manifest.def)) as CustomDef;
+        set({ design: { ...st.design, defs: [...st.design.defs, def] } });
+        after("引入组件", false);
+      }
+      const { camera, viewport } = get();
+      const cx = viewport.w / (2 * GRID * camera.zoom) + camera.x;
+      const cy = viewport.h / (2 * GRID * camera.zoom) + camera.y;
+      get().placeComp("custom:" + manifest.id, cx, cy);
+      return true;
     },
   };
 });

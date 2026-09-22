@@ -1,23 +1,25 @@
-import { Alert, Button, Space, Table, Tag, Tooltip, Upload } from "antd";
+import { Alert, Button, Popconfirm, Space, Table, Tag, Tooltip, Upload } from "antd";
 import { useState } from "react";
-import type { WorkshopState } from "../../workshop/index.ts";
-import { diffInterface, emptyWorkshop, exportWorkshop, importWorkshop } from "../../workshop/index.ts";
 import type { ComponentManifest } from "../../workshop/index.ts";
+import { diffInterface, exportWorkshop, importWorkshop } from "../../workshop/index.ts";
+import { useEditor } from "../store.ts";
 
 /* ------------------------------------------------------------------ *
  * IMP-13: 组件工坊面板
  *
  * 用户封装 + 课程奖励组件的本地索引；版本不可变；
- * 升级前显示接口差异并要求用户确认。
+ * 升级前显示接口差异并要求用户确认；当前版本可直接放进画布复用。
+ * 工坊状态存在 editor store 里（并落本地存储），切标签页不会丢。
  * ------------------------------------------------------------------ */
 
-export interface WorkshopPanelProps {
-  state: WorkshopState;
-  onChange: (next: WorkshopState) => void;
-}
-
-export default function WorkshopPanel({ state, onChange }: WorkshopPanelProps) {
+export default function WorkshopPanel() {
+  const state = useEditor((s) => s.workshop);
+  const replaceWorkshop = useEditor((s) => s.replaceWorkshop);
+  const removeWorkshopVersion = useEditor((s) => s.removeWorkshopVersion);
+  const useWorkshopComponent = useEditor((s) => s.useWorkshopComponent);
+  const setPanel = useEditor((s) => s.setPanel);
   const [diffId, setDiffId] = useState<string | null>(null);
+  const [notice, setNotice] = useState<{ kind: "success" | "warning"; text: string } | null>(null);
 
   const rows = state.components;
   const grouped = groupBy(rows, (c) => c.id);
@@ -31,6 +33,7 @@ export default function WorkshopPanel({ state, onChange }: WorkshopPanelProps) {
       <Space style={{ marginBottom: 8 }}>
         <Button
           size="small"
+          disabled={!rows.length}
           onClick={() => {
             const blob = new Blob([exportWorkshop(state)], { type: "application/json" });
             const url = URL.createObjectURL(blob);
@@ -45,12 +48,20 @@ export default function WorkshopPanel({ state, onChange }: WorkshopPanelProps) {
         </Button>
         <Upload
           accept="application/json"
+          showUploadList={false}
           beforeUpload={(file) => {
             const reader = new FileReader();
             reader.onload = () => {
-              const r = importWorkshop(state, String(reader.result ?? ""));
-              onChange({ ...state });
-              if (r.failed) alert(`导入失败 ${r.failed} 项`);
+              const draft = { components: state.components.map((c) => ({ ...c })) };
+              const r = importWorkshop(draft, String(reader.result ?? ""));
+              replaceWorkshop(draft);
+              setNotice({
+                kind: r.failed ? "warning" : "success",
+                text:
+                  r.added || r.failed
+                    ? `导入完成：新增 ${r.added} 个版本${r.failed ? `，${r.failed} 项格式不符被跳过` : ""}`
+                    : "导入完成：备份里的组件本来就都在工坊里",
+              });
             };
             reader.readAsText(file);
             return false;
@@ -60,12 +71,23 @@ export default function WorkshopPanel({ state, onChange }: WorkshopPanelProps) {
         </Upload>
       </Space>
 
-      {state.components.length === 0 ? (
+      {notice && (
+        <Alert
+          type={notice.kind}
+          showIcon
+          closable
+          onClose={() => setNotice(null)}
+          message={notice.text}
+          style={{ marginBottom: 8 }}
+        />
+      )}
+
+      {rows.length === 0 ? (
         <Alert
           type="info"
           showIcon
           message="作品工坊还是空的"
-          description="保存第一个电路，或导入已有 JSON。组件版本一旦发布就不可修改，升级需另存为新版本。"
+          description="在画布里选中元件后「打包子电路」，组件会自动登记到这里；也可以导入已有的 workshop.json 备份。组件版本一旦发布就不可修改，升级需另存为新版本。"
         />
       ) : (
         <Table
@@ -109,7 +131,7 @@ export default function WorkshopPanel({ state, onChange }: WorkshopPanelProps) {
               title: "来源",
               dataIndex: "source",
               width: 80,
-              render: (v: string) => <Tag>{v}</Tag>,
+              render: (v: string) => <Tag>{sourceLabel(v)}</Tag>,
             },
             {
               title: "操作",
@@ -120,20 +142,42 @@ export default function WorkshopPanel({ state, onChange }: WorkshopPanelProps) {
                 const newer = same.find((c) => c.version > r.version && !c.supersededBy);
                 return (
                   <Space size={4}>
-                      {newer && (
-                        <Button
-                          size="small"
-                          onClick={() => {
-                            setDiffId(`${r.id}#${r.version}->${newer.version}`);
-                          }}
-                        >
-                          查看升级
-                        </Button>
-                      )}
-                      {latest && latest.version === r.version && (
-                        <Tag color="green">当前使用</Tag>
-                      )}
-                    </Space>
+                    {newer && (
+                      <Button size="small" onClick={() => setDiffId(`${r.id}#${r.version}->${newer.version}`)}>
+                        查看升级
+                      </Button>
+                    )}
+                    {latest?.version === r.version && (
+                      <Button
+                        size="small"
+                        type="primary"
+                        ghost
+                        onClick={() => {
+                          const ok = useWorkshopComponent(r.id, r.version);
+                          setNotice({
+                            kind: ok ? "success" : "warning",
+                            text: ok
+                              ? "已把组件放到画布中央"
+                              : "当前视图放不下这枚组件（可能正处在它自己的子电路里）",
+                          });
+                          if (ok) setPanel("inspector");
+                        }}
+                      >
+                        放入画布
+                      </Button>
+                    )}
+                    <Popconfirm
+                      title={`删除 v${r.version}？`}
+                      description="只影响工坊索引，已经用过这枚组件的电路不会被改动。"
+                      okText="删除"
+                      cancelText="取消"
+                      onConfirm={() => removeWorkshopVersion(r.id, r.version)}
+                    >
+                      <Button size="small" danger>
+                        删除
+                      </Button>
+                    </Popconfirm>
+                  </Space>
                 );
               },
             },
@@ -141,34 +185,53 @@ export default function WorkshopPanel({ state, onChange }: WorkshopPanelProps) {
         />
       )}
 
-      {diffId && (() => {
-        const [fromVer, toVer] = diffId.split("->");
-        const [fromId] = fromVer.split("#");
-        const from = state.components.find((c) => c.id === fromId && c.version === Number(fromVer.split("#")[1]));
-        const to = state.components.find((c) => c.id === fromId && c.version === Number(toVer));
-        if (!from || !to) return null;
-        const d = diffInterface(from, to);
-        return (
-          <Alert
-            type={d.removed.length || d.changed.length ? "warning" : "success"}
-            showIcon
-            style={{ marginTop: 12 }}
-            message={`v${from.version} → v${to.version} 接口差异`}
-            description={
-              <ul className="asm-errors">
-                {d.added.map((n) => <li key={"a" + n}>新增 {n}</li>)}
-                {d.removed.map((n) => <li key={"r" + n}>删除 {n}</li>)}
-                {d.changed.map((c) => <li key={"c" + c.name}>变化 {c.name}: {c.reason}</li>)}
-                {!d.added.length && !d.removed.length && !d.changed.length && <li>无破坏性差异</li>}
-              </ul>
-            }
-            closable
-            onClose={() => setDiffId(null)}
-          />
-        );
-      })()}
+      {diffId &&
+        (() => {
+          const [fromVer, toVer] = diffId.split("->");
+          const [fromId] = fromVer.split("#");
+          const from = state.components.find((c) => c.id === fromId && c.version === Number(fromVer.split("#")[1]));
+          const to = state.components.find((c) => c.id === fromId && c.version === Number(toVer));
+          if (!from || !to) return null;
+          const d = diffInterface(from, to);
+          return (
+            <Alert
+              type={d.removed.length || d.changed.length ? "warning" : "success"}
+              showIcon
+              style={{ marginTop: 12 }}
+              message={`v${from.version} → v${to.version} 接口差异`}
+              description={
+                <ul className="asm-errors">
+                  {d.added.map((n) => (
+                    <li key={"a" + n}>新增 {n}</li>
+                  ))}
+                  {d.removed.map((n) => (
+                    <li key={"r" + n}>删除 {n}</li>
+                  ))}
+                  {d.changed.map((c) => (
+                    <li key={"c" + c.name}>
+                      变化 {c.name}: {c.reason}
+                    </li>
+                  ))}
+                  {!d.added.length && !d.removed.length && !d.changed.length && <li>无破坏性差异</li>}
+                </ul>
+              }
+              closable
+              onClose={() => setDiffId(null)}
+            />
+          );
+        })()}
     </div>
   );
+}
+
+const SOURCE_LABEL: Record<string, string> = {
+  user: "自建",
+  course: "课程奖励",
+  imported: "导入",
+};
+
+function sourceLabel(v: string): string {
+  return SOURCE_LABEL[v] ?? v;
 }
 
 function groupBy<T, K>(arr: T[], key: (t: T) => K): Map<K, T[]> {
@@ -183,18 +246,4 @@ function groupBy<T, K>(arr: T[], key: (t: T) => K): Map<K, T[]> {
     bucket.push(x);
   }
   return m;
-}
-
-/** 默认从项目里加载（如果存在）或创建空工坊 */
-export function loadOrEmpty(json: string | null): WorkshopState {
-  if (!json) return emptyWorkshop();
-  try {
-    const obj = JSON.parse(json);
-    if (obj && Array.isArray(obj.components)) {
-      return { components: obj.components };
-    }
-  } catch {
-    // ignore
-  }
-  return emptyWorkshop();
 }

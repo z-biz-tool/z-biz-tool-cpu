@@ -976,6 +976,47 @@ ok:
   const imported = importWorkshop({ components: [] }, json);
   check("IMP-13: 导入还原", imported.added === 2);
 
+  // IMP-13 本地存储：读写对称 + 坏档降级
+  const { hydrateWorkshop, removeVersion, loadWorkshopLocal } = await import("../src/workshop/index.ts");
+  const back = hydrateWorkshop(json);
+  check(
+    "IMP-13: 本地存档还原保留版本与来源",
+    !!back &&
+      back.components.length === 2 &&
+      back.components.find((c) => c.version === 1)?.supersededBy === 2 &&
+      back.components.every((c) => c.source === "user")
+  );
+  const fresh: { components: Array<typeof m3> } = { components: [] };
+  importWorkshop(fresh, json);
+  check("IMP-13: 导入备份把来源改标为 imported", fresh.components.length === 2 && fresh.components.every((c) => c.source === "imported"));
+  check("IMP-13: 非 JSON 存档按空工坊处理", hydrateWorkshop("{ 这不是 json") === null);
+  check(
+    "IMP-13: 版本字段不匹配的存档被拒绝",
+    hydrateWorkshop(JSON.stringify({ version: 99, components: back?.components ?? [] })) === null
+  );
+  check(
+    "IMP-13: 存档里缺 def 的条目被丢弃",
+    hydrateWorkshop(JSON.stringify({ version: 1, components: [{ id: "x", version: 1 }, back?.components[0]] }))
+      ?.components.length === 1
+  );
+  let lsOk = true;
+  try {
+    lsOk = loadWorkshopLocal().components.length === 0; // 无 localStorage 环境不得抛异常
+  } catch {
+    lsOk = false;
+  }
+  check("IMP-13: 无本地存储时返回空工坊且不抛错", lsOk);
+
+  // IMP-13 删除版本：唯一当前版被删时，旧版重新成为当前
+  const afterRemove = removeVersion(state, "alu", 2);
+  check(
+    "IMP-13: 删掉当前版后旧版回指当前",
+    !!afterRemove && afterRemove.components.length === 1 && afterRemove.components[0].version === 1 && !afterRemove.components[0].supersededBy
+  );
+  check("IMP-13: removeVersion 不改原状态", state.components.length === 2 && m1.supersededBy === 2);
+  check("IMP-13: 删除不存在的版本返回 null", removeVersion(state, "alu", 99) === null);
+  check("IMP-13: 删掉中间版后仍保留当前版", removeVersion({ components: [m1, m3] }, "alu", 1)?.components.length === 1);
+
   // IMP-14: 命中测试 + a11y
   const { buildHitIndex, hitTest, screenToGrid } = await import("../src/editor/hitIndex.ts");
   const { buildA11y, neighbour, describeFocus } = await import("../src/editor/a11y.ts");

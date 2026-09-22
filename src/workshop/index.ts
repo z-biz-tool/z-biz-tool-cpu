@@ -127,6 +127,68 @@ export function manifestToDef(m: ComponentManifest): CustomDef {
   return m.def;
 }
 
+/**
+ * 删除某个版本并返回新状态（原状态不动）。
+ * 若删掉的是该 id 唯一的「当前版」，把剩下的最新版重新指回当前，
+ * 否则组件会从工坊里凭空消失。
+ */
+export function removeVersion(state: WorkshopState, id: string, version: number): WorkshopState | null {
+  if (!state.components.some((c) => c.id === id && c.version === version)) return null;
+  const rest = state.components.filter((c) => !(c.id === id && c.version === version)).map((c) => ({ ...c }));
+  const same = rest.filter((c) => c.id === id).sort((a, b) => a.version - b.version);
+  if (same.length && !same.some((c) => !c.supersededBy)) {
+    same[same.length - 1].supersededBy = undefined;
+  }
+  return { components: rest };
+}
+
+/* ------------------------- 本地持久化（IMP-13） ------------------------- *
+ * 工坊只保存在本机 localStorage；读写都吞掉异常，坏档按空工坊处理。
+ * ---------------------------------------------------------------------- */
+
+const LS_KEY = "cpu-workshop-v1";
+
+/** 本地存储里的版本字段；不匹配的旧格式一律按空工坊处理 */
+const LS_VERSION = 1;
+
+/** 把存档 JSON 原样还原成工坊状态（保留 user/course 来源标记），结构不符返回 null */
+export function hydrateWorkshop(json: string): WorkshopState | null {
+  try {
+    const obj = JSON.parse(json);
+    if (!obj || obj.version !== LS_VERSION || !Array.isArray(obj.components)) return null;
+    const components = obj.components
+      .filter(
+        (c: unknown): c is ComponentManifest =>
+          !!c && typeof (c as ComponentManifest).id === "string" && !!(c as ComponentManifest).def
+      )
+      .map((c: ComponentManifest) => ({
+        ...c,
+        source: c.source === "course" || c.source === "imported" ? c.source : "user",
+      }));
+    return { components };
+  } catch {
+    return null;
+  }
+}
+
+export function loadWorkshopLocal(): WorkshopState {
+  try {
+    const raw = localStorage.getItem(LS_KEY);
+    if (!raw) return emptyWorkshop();
+    return hydrateWorkshop(raw) ?? emptyWorkshop();
+  } catch {
+    return emptyWorkshop();
+  }
+}
+
+export function saveWorkshopLocal(state: WorkshopState): void {
+  try {
+    localStorage.setItem(LS_KEY, exportWorkshop(state));
+  } catch {
+    /* 容量不足时静默：导出备份仍是兜底通道 */
+  }
+}
+
 export function exportWorkshop(state: WorkshopState): string {
   return JSON.stringify({ version: 1, components: state.components }, null, 2);
 }
