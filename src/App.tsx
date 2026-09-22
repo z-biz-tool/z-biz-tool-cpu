@@ -38,11 +38,18 @@ const TABS: { key: PanelKey; label: string | ((i: TabInfo) => React.ReactNode); 
   { key: "help", label: "手册", render: () => <HelpPanel /> },
 ];
 
-/** 输入框里打字时不要触发快捷键 */
-function typing(e: KeyboardEvent): boolean {
+/**
+ * 焦点域判定（doc 02 §9：先分派焦点域，再决定操作对象）。
+ * 命中这两类区域时，按键归区域自己，不能打到背后的电路上：
+ *  - 文本编辑区：⌘Z 撤销的是文字，Delete 删的是字符
+ *  - 模态弹层（成就弹窗、Popconfirm）：空格/方向键不该偷偷推进仿真
+ */
+function inFocusZone(e: KeyboardEvent): boolean {
   const el = e.target as HTMLElement | null;
-  if (!el) return false;
-  return !!el.closest("input, textarea, [contenteditable='true'], .ant-select");
+  if (!el || typeof el.closest !== "function") return false;
+  return !!el.closest(
+    "input, textarea, [contenteditable='true'], .ant-select, .ant-modal-wrap, .ant-popover, [role='dialog']"
+  );
 }
 
 interface TabInfo {
@@ -57,6 +64,7 @@ export default function App() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (inFocusZone(e)) return;
       const st = useEditor.getState();
       const mod = e.metaKey || e.ctrlKey;
       if (mod && e.key.toLowerCase() === "z") {
@@ -70,9 +78,6 @@ export default function App() {
         st.duplicate();
         return;
       }
-      if (mod && e.key === "Enter") return; // 汇编面板自己处理
-      if (typing(e)) return;
-
       switch (e.key) {
         case " ":
           e.preventDefault();

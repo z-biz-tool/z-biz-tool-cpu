@@ -190,6 +190,9 @@ export function HelpPanel() {
           ))}
         </tbody>
       </table>
+      <div className="panel-note">
+        焦点在输入框、下拉框或弹窗里时，以上快捷键不生效——按键交给当前区域处理（文本框里的 ⌘Z 撤销的是文字）。
+      </div>
 
       <div className="sub-title">Z16 指令集</div>
       <div className="panel-note">
