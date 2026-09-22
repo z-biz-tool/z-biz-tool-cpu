@@ -13,6 +13,7 @@
   --accent-soft: rgba(167, 139, 250, 0.16);
   --ok: #34d399;
   --bad: #f87171;
+  --warn: #fbbf24;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
@@ -141,6 +142,33 @@ body {
 .stat b {
   color: var(--text);
   margin-left: 3px;
+}
+/* 运行状态徽标：doc 02 §5.2 要求每种状态有独立观感 */
+.run-state {
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--edge);
+  background: var(--panel-2);
+  font-size: 11px;
+  line-height: 16px;
+  white-space: nowrap;
+}
+.run-state.tone-ok {
+  color: var(--ok);
+  border-color: rgba(52, 211, 153, 0.4);
+}
+.run-state.tone-info {
+  color: var(--accent);
+  border-color: rgba(167, 139, 250, 0.45);
+  background: var(--accent-soft);
+}
+.run-state.tone-warn {
+  color: var(--warn);
+  border-color: rgba(251, 191, 36, 0.45);
+}
+.run-state.tone-error {
+  color: var(--bad);
+  border-color: rgba(248, 113, 113, 0.5);
 }
 .cost {
   color: var(--accent);

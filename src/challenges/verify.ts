@@ -1,6 +1,6 @@
 import { totalCost } from "../core/custom.ts";
 import { baseDef, parseWordToken } from "../core/registry.ts";
-import { Simulator } from "../core/sim.ts";
+import { Simulator, worstSettle, type SettleOutcome } from "../core/sim.ts";
 import type { SimError } from "../core/netlist.ts";
 import type { CompInstance, Design } from "../core/types.ts";
 import { mask } from "../core/types.ts";
@@ -35,6 +35,8 @@ export interface LevelResult {
   errors: SimError[];
   /** 组合逻辑未收敛（振荡） */
   unstable: boolean;
+  /** doc 02 §5.2：unstable 的具体成因，UI 据此选文案 */
+  settleOutcome: SettleOutcome;
   /** 额外提示，如「时钟没接」 */
   notes: string[];
 }
@@ -116,6 +118,7 @@ export function runLevelTests(level: Level, design: Design): LevelResult {
   const notes: string[] = [];
   let sim0: Simulator | undefined;
   let unstable = false;
+  let settleOutcome: SettleOutcome = "converged";
 
   // FIX-08: 预先检查契约：白名单 + 骨架 I/O 位宽
   const contract = contractBitWidths(level);
@@ -146,7 +149,8 @@ export function runLevelTests(level: Level, design: Design): LevelResult {
     const name = test.name ?? `用例 ${i + 1}`;
     const sim = new Simulator(design, design.root);
     sim0 = sim;
-    if (sim.unstable) unstable = true;
+    settleOutcome = worstSettle(settleOutcome, sim.settleOutcome);
+    unstable = unstable || settleOutcome !== "converged";
 
     for (const phase of phasesOf(test)) {
       for (const [k, v] of Object.entries(phase.inputs ?? {})) {
@@ -158,7 +162,8 @@ export function runLevelTests(level: Level, design: Design): LevelResult {
         sim.setInput(inst.id, num(v));
       }
       if (phase.steps) sim.run(phase.steps);
-      if (sim.unstable) unstable = true;
+      settleOutcome = worstSettle(settleOutcome, sim.settleOutcome);
+      unstable = unstable || settleOutcome !== "converged";
     }
 
     // FIX-08: 期望值的位宽以骨架为准；学生输出位宽不足必须报失败，不能被截断绕过。
@@ -256,6 +261,7 @@ export function runLevelTests(level: Level, design: Design): LevelResult {
     defs: design.defs.length,
     errors,
     unstable,
+    settleOutcome,
     notes,
   };
 }

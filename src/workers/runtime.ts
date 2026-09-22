@@ -201,7 +201,8 @@ export class SimWorkerRuntime {
         this.sendResult(req, "blocked");
         return;
       }
-      const halted = !!this.session.sim.valueOf({ comp: findHaltRef(this.session.sim), pin: "in" })?.value;
+      // 没有 DONE 元件的电路不会因 halt 退出 — 由上层用 fixed N 步推进
+      const halted = this.session.sim.halted();
       if (halted) {
         done = true;
         // 多让一帧让 IO 写入完成
@@ -270,6 +271,7 @@ export class SimWorkerRuntime {
       halted: reason === "halted",
       tick: sim.time,
       unstable: sim.unstable,
+      settleOutcome: sim.settleOutcome,
       hasBlockingError: sim.hasBlockingError,
       probes: sim.probes().map((p) => ({ id: p.id, name: p.name, label: p.label, value: p.value })),
       logs: sim.logs.slice(-200) as SimLog[],
@@ -284,16 +286,6 @@ export class SimWorkerRuntime {
       payload: rp,
     });
   }
-}
-
-/** 在没有 done 引脚的电路中，advance 不会因 halt 退出 — 用 fixed N 步 */
-function findHaltRef(sim: Simulator): string {
-  for (const c of sim.rootComps()) {
-    const cn = sim.compById(c.id);
-    if (!cn) continue;
-    if (cn.inst.name === "DONE" || cn.def.label.includes("DONE")) return c.id;
-  }
-  return "__none__";
 }
 
 /** 同进程 in-memory backend — 用于 node verify */

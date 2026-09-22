@@ -1,4 +1,5 @@
 import { Segmented, Tooltip } from "antd";
+import { RUN_STATE_TEXT, type RunStateCode } from "../core/sim.ts";
 import { designCost, useEditor } from "./store.ts";
 
 /* ------------------------------------------------------------------ *
@@ -9,6 +10,9 @@ export default function Toolbar() {
   const running = useEditor((s) => s.running);
   const speed = useEditor((s) => s.speed);
   const simTime = useEditor((s) => s.sim.time);
+  /** doc 02 §5.2：顶栏常驻运行状态。选择器只返回 code 这个原始值，
+   *  这样任何状态变化（含 pressButton 这类只动仿真不动 design 的）都会刷新徽标 */
+  const runCode = useEditor((s) => s.sim.runState(s.running).code);
   const tool = useEditor((s) => s.tool);
   const camera = useEditor((s) => s.camera);
   const view = useEditor((s) => s.view);
@@ -17,6 +21,8 @@ export default function Toolbar() {
   const redo = useEditor((s) => s.redo);
   const selection = useEditor((s) => s.selection);
   const st = useEditor.getState;
+
+  const runInfo = { code: runCode as RunStateCode, ...RUN_STATE_TEXT[runCode as RunStateCode] };
 
   const circuit = view === "root" ? design.root : design.defs.find((d) => d.id === view)?.circuit ?? design.root;
   const cost = designCost(design);
@@ -91,6 +97,15 @@ export default function Toolbar() {
       </div>
 
       <div className="tb-group stats">
+        <Tooltip title={runInfo.detail}>
+          <span
+            className={"run-state tone-" + runInfo.tone}
+            data-run-state={runInfo.code}
+            role="status"
+          >
+            {runInfo.label}
+          </span>
+        </Tooltip>
         <span className="stat">
           周期 <b className="mono">{simTime}</b>
         </span>

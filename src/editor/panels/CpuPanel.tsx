@@ -2,6 +2,7 @@ import { Alert, Button, Progress, Switch, Table, Tag, Tooltip } from "antd";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { REG_NAMES } from "../../asm/isa.ts";
 import { hex } from "../../core/types.ts";
+import { RUN_STATE_TEXT, settleState, type SettleOutcome } from "../../core/sim.ts";
 import { CTRL_DOC, referenceCpu } from "../../cpu/reference.ts";
 import { programImage, runProgram } from "../../cpu/run.ts";
 import type { CpuRun } from "../../cpu/run.ts";
@@ -28,6 +29,8 @@ interface Snapshot {
   done: boolean;
   steps: number;
   unstable: boolean;
+  /** doc 02 §5.2：未收敛的具体成因 */
+  settleOutcome: SettleOutcome;
 }
 
 function snapOf(run: CpuRun, prints: string[]): Snapshot {
@@ -46,6 +49,7 @@ function snapOf(run: CpuRun, prints: string[]): Snapshot {
     done: !!v({ comp: h.done, pin: "in" }),
     steps: run.sim.time,
     unstable: run.sim.unstable,
+    settleOutcome: run.sim.settleOutcome,
   };
 }
 
@@ -71,6 +75,8 @@ export default function CpuPanel() {
   const [auto, setAuto] = useState(false);
   const [showWizard, setShowWizard] = useState(false);
   const prints = useRef<string[]>([]);
+  /** doc 02 §5.2：振荡有重复状态作证据，预算用尽只能如实说「没有证据判定振荡」 */
+  const settle = snap ? settleState(snap.settleOutcome) : null;
 
   const load = () => {
     const res = assemble(source, { base: 0 });
@@ -254,13 +260,13 @@ export default function CpuPanel() {
           <div className="sub-title">
             终端输出
             <span className="pull-right dim">
-              第 {snap.steps} 拍 {snap.done ? "· 已停机" : ""}
+              第 {snap.steps} 拍 {snap.done ? `· ${RUN_STATE_TEXT.halted.label}` : ""}
             </span>
           </div>
           <div className={"cpu-out" + (snap.done ? " done" : "")}>
             {snap.prints.length ? snap.prints.join(" ") : <span className="dim">还没有输出</span>}
           </div>
-          {snap.unstable && <Alert type="warning" showIcon message="组合逻辑未收敛，可能存在环路" />}
+          {settle && <Alert type="warning" showIcon message={settle.label} description={settle.detail} />}
         </>
       )}
 

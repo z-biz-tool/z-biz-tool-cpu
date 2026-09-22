@@ -5,7 +5,7 @@
  * ------------------------------------------------------------------ */
 
 import type { Design } from "../core/types.ts";
-import type { PinValue, SimLog, SimSnapshot } from "../core/sim.ts";
+import type { PinValue, SettleOutcome, SimLog, SimSnapshot } from "../core/sim.ts";
 
 export const WORKER_PROTOCOL = "z-biz-tool-cpu/sim/1";
 
@@ -80,6 +80,8 @@ export interface ResultPayload {
   halted: boolean;
   tick: number;
   unstable: boolean;
+  /** doc 02 §5.2：unstable 只说「没收敛」，具体是振荡还是预算用尽由这里区分 */
+  settleOutcome: SettleOutcome;
   hasBlockingError: boolean;
   /** 当前选中一组输出探针的快照 */
   probes: { id: string; name: string; label: string; value?: PinValue }[];

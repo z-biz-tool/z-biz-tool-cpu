@@ -3,7 +3,7 @@
  * 覆盖组合逻辑、位宽推断、总线拆分/合并、时序元件、子电路、错误诊断。
  */
 import { CircuitBuilder } from "../src/core/build.ts";
-import { Simulator } from "../src/core/sim.ts";
+import { RUN_STATE_TEXT, Simulator, settleState, worstSettle } from "../src/core/sim.ts";
 import { totalCost } from "../src/core/custom.ts";
 import { LEVELS, levelDesign, solutionDesign } from "../src/challenges/levels.ts";
 import { runLevelTests } from "../src/challenges/verify.ts";
@@ -1065,6 +1065,81 @@ ok:
   check("IMP-14: describeFocus 返回描述", typeof desc === "string" && desc.length > 0, desc);
   const g = screenToGrid(0, 0, { x: 0, y: 0, zoom: 1 });
   check("IMP-14: 屏幕转 grid 一致", g.x === 0 && g.y === 0);
+
+  /* doc 02 §5.2: 运行状态语言 —— HALTED / NON_CONVERGENT / RESOURCE_LIMIT 互不冒充 */
+  {
+    // 反相器自环：有「最近迭代重复」的事实作证据，才允许说振荡
+    const ring = new CircuitBuilder();
+    const inv = ring.add("not", 0, 0);
+    ring.connect(inv, "out", inv, "i0");
+    const ringSim = mkSim(ring.build());
+    check("RS: 反馈环路判定为振荡 NON_CONVERGENT", ringSim.settleOutcome === "oscillating" && ringSim.unstable, ringSim.settleOutcome);
+    check("RS: 振荡提示优先于运行中", ringSim.runState(true).code === "oscillating", ringSim.runState(true).code);
+
+    // HALTED：DONE 拉高后即使还在运行也要如实报停机
+    const haltB = new CircuitBuilder();
+    const hsrc = haltB.add("input", 0, 0, { bitWidth: 1 });
+    haltB.add("output", 5, 0, { bitWidth: 1 }, { name: "DONE" });
+    haltB.connect(hsrc, "out", "DONE", "in");
+    const haltSim = mkSim(haltB.build());
+    check("RS: DONE 未拉高不算停机", !haltSim.halted() && haltSim.runState(false).code === "idle");
+    haltSim.setInput(hsrc, 1);
+    check("RS: DONE 拉高 → HALTED 压过运行中", haltSim.halted() && haltSim.runState(true).code === "halted");
+    haltSim.hasBlockingError = true;
+    check("RS: COMPILE_ERROR 压过其它状态", haltSim.runState(true).code === "error");
+    haltSim.hasBlockingError = false;
+
+    // 已暂停 vs 待运行：推进过节拍却没有 DONE 的电路
+    const idleB = new CircuitBuilder();
+    const isrc = idleB.add("input", 0, 0, { bitWidth: 1 });
+    idleB.add("output", 5, 0, { bitWidth: 1 });
+    idleB.connect(isrc, "out", "n2", "in");
+    const idleSim = mkSim(idleB.build());
+    check("RS: 未推进 → 待运行", idleSim.runState(false).code === "idle");
+    idleSim.step();
+    check("RS: 推进后暂停态与待运行态可区分", idleSim.runState(false).code === "paused" && idleSim.runState(true).code === "running");
+
+    // 只命中预算时不能宣称振荡
+    const rl = RUN_STATE_TEXT["resource-limit"];
+    check(
+      "RS: RESOURCE_LIMIT 文案只谈预算、不武断称振荡",
+      /预算/.test(rl.detail) && !/振荡/.test(rl.label) && !/判定为振荡/.test(rl.detail.replace(/不能判定为振荡|无证据判定振荡/, "")),
+      rl.detail
+    );
+    check("RS: 振荡文案给出下一步", /环路|反馈/.test(RUN_STATE_TEXT.oscillating.detail));
+    check(
+      "RS: 三种状态文案互不重复",
+      new Set([RUN_STATE_TEXT.oscillating.label, rl.label, RUN_STATE_TEXT.halted.label]).size === 3
+    );
+    check("RS: 已收敛不提示", settleState("converged") === null);
+    check("RS: 未收敛给出对应文案", settleState("oscillating")?.code === "oscillating" && settleState("resource-limit")?.code === "resource-limit");
+    check(
+      "RS: worstSettle 取证据更强的一侧",
+      worstSettle("converged", "oscillating") === "oscillating" &&
+        worstSettle("oscillating", "resource-limit") === "oscillating" &&
+        worstSettle("resource-limit", "converged") === "resource-limit"
+    );
+
+    // 判题链路要把成因一路带到关卡面板（ChallengePanel 靠它选文案）
+    const ringResult = runLevelTests(LEVELS[0], { name: "ring", root: ring.build(), defs: [] });
+    check("RS: 判题结果携带振荡成因", ringResult.settleOutcome === "oscillating" && ringResult.unstable && !ringResult.pass, ringResult.settleOutcome);
+
+    // 回归：新分类不能把合法设计误判成未收敛
+    let settleChecked = 0;
+    let misjudged = "";
+    for (const lvl of LEVELS) {
+      for (const design of [levelDesign(lvl), solutionDesign(lvl)]) {
+        if (!design) continue;
+        settleChecked++;
+        const s = new Simulator(design, design.root);
+        if (s.settleOutcome !== "converged" && !misjudged) misjudged = `${lvl.id}: ${s.settleOutcome}`;
+      }
+    }
+    const cpuSim = new Simulator(cpu.design, cpu.design.root);
+    settleChecked++;
+    if (cpuSim.settleOutcome !== "converged") misjudged ||= "参考 CPU: " + cpuSim.settleOutcome;
+    check(`RS: ${settleChecked} 套设计全部判为已收敛`, misjudged === "", misjudged);
+  }
 
   // AT-01..AT-12 全验收矩阵
   const atModule = await import("../src/atCoverage.ts");

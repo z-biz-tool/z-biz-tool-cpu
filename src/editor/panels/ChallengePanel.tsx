@@ -3,6 +3,7 @@ import { useState } from "react";
 import { LEVELS, TIERS, levelById } from "../../challenges/levels.ts";
 import { BADGES, isUnlocked, passed, scoreOf, tierDone } from "../../challenges/progress.ts";
 import type { Badge } from "../../challenges/progress.ts";
+import { settleState } from "../../core/sim.ts";
 import { designCost, useEditor } from "../store.ts";
 
 /* ------------------------------------------------------------------ *
@@ -18,6 +19,8 @@ export default function ChallengePanel() {
   const st = useEditor.getState;
   const level = levelById(levelId ?? "");
   const score = scoreOf(progress);
+  /** doc 02 §5.2：振荡与预算用尽必须说不同的话 */
+  const settle = result ? settleState(result.settleOutcome) : null;
 
   return (
     <div className="panel-body">
@@ -113,7 +116,11 @@ export default function ChallengePanel() {
                   {result.defs ? ` · 子电路 ${result.defs}` : ""}
                 </span>
               </div>
-              {result.unstable && <p className="note error">组合逻辑未收敛（存在振荡环路）。</p>}
+              {settle && (
+                <p className="note error">
+                  {settle.label}：{settle.detail}
+                </p>
+              )}
               {result.notes.map((n, i) => (
                 <p className="note" key={i}>
                   {n}

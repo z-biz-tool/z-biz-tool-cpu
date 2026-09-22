@@ -27,12 +27,69 @@ export interface Probe {
 
 const MAX_PASSES = 4000;
 
+/**
+ * doc 02 §5.2：把「不收敛」拆成有证据的振荡与仅命中预算两种状态，
+ * UI 语言必须区分（RESOURCE_LIMIT 不能宣称振荡）。
+ */
+export type SettleOutcome = "converged" | "oscillating" | "resource-limit";
+
+/** 合并多次 settle 的结果：取证据最强的那个（振荡 > 预算用尽 > 收敛） */
+export function worstSettle(a: SettleOutcome, b: SettleOutcome): SettleOutcome {
+  const rank: Record<SettleOutcome, number> = { converged: 0, "resource-limit": 1, oscillating: 2 };
+  return rank[a] >= rank[b] ? a : b;
+}
+
+/** 未收敛时给出对应的运行状态（含文案）；已收敛返回 null，供 UI 决定要不要提示 */
+export function settleState(outcome: SettleOutcome): RunStateInfo | null {
+  const code = outcome === "converged" ? null : outcome;
+  return code ? { code, ...RUN_STATE_TEXT[code] } : null;
+}
+
+/** doc 02 §5.2 的运行状态枚举：每一态有自己的文案与主动作，不允许互相冒充 */
+export type RunStateCode =
+  | "idle"
+  | "running"
+  | "paused"
+  | "halted"
+  | "oscillating"
+  | "resource-limit"
+  | "error";
+
+export interface RunStateInfo {
+  code: RunStateCode;
+  /** 顶栏 chip 短标签 */
+  label: string;
+  /** 面板/浮层的完整语言：说清证据，再给下一步 */
+  detail: string;
+  tone: "ok" | "info" | "warn" | "error";
+}
+
+export const RUN_STATE_TEXT: Record<RunStateCode, { label: string; detail: string; tone: RunStateInfo["tone"] }> = {
+  idle: { label: "待运行", detail: "电路尚未开始仿真，按 ▶ 或空格推进。", tone: "ok" },
+  running: { label: "运行中", detail: "仿真正在按时钟推进。", tone: "info" },
+  paused: { label: "已暂停", detail: "仿真停在当前拍，可继续运行、单步或复位。", tone: "info" },
+  halted: { label: "HALTED 已停机", detail: "DONE 引脚已拉高，程序正常结束；输出结果仍然有效。", tone: "ok" },
+  oscillating: {
+    label: "NON_CONVERGENT 振荡",
+    detail: "最近若干次迭代出现了重复状态：这是组合环路的直接证据，输出值不可信。请断开反馈路径或改用时序元件。",
+    tone: "warn",
+  },
+  "resource-limit": {
+    label: "RESOURCE_LIMIT 预算用尽",
+    detail: "组合迭代达到预算上限，但没有重复状态，因此不能判定为振荡。可以拆分电路或缩小位宽后重试。",
+    tone: "warn",
+  },
+  error: { label: "COMPILE_ERROR 无法仿真", detail: "存在阻断性编译错误，先修复诊断才能推进。", tone: "error" },
+};
+
 export class Simulator {
   readonly design: Design;
   readonly circuit: Circuit;
   nl: Netlist;
   time = 0;
   unstable = false;
+  /** doc 02 §5.2: 收敛状态的细分；unstable 保留作兼容读取 */
+  settleOutcome: SettleOutcome = "converged";
   logs: SimLog[] = [];
   private ctxs: (EvalCtx | undefined)[] = [];
   private queue: number[] = [];
@@ -299,6 +356,47 @@ export class Simulator {
     return this.nl.comps.find((c) => c.id === id);
   }
 
+  /**
+   * 画布上标着 DONE 的元件：运行内核靠它判断 HALTED，UI 也用它定位停机位置。
+   * 拓扑在构造后不再变化，结果缓存 —— 顶栏每帧都会读运行状态。
+   */
+  private _haltId?: string | null;
+  haltCompId(): string | null {
+    if (this._haltId === undefined) {
+      let id: string | null = null;
+      for (const c of this.nl.comps) {
+        if (c.id.includes("/")) continue;
+        if (c.inst.name === "DONE" || c.def.label.includes("DONE")) {
+          id = c.id;
+          break;
+        }
+      }
+      this._haltId = id;
+    }
+    return this._haltId;
+  }
+
+  /** DONE 引脚已拉高 */
+  halted(): boolean {
+    const id = this.haltCompId();
+    return !!id && !!this.valueOf({ comp: id, pin: "in" })?.value;
+  }
+
+  /**
+   * doc 02 §5.2：运行状态只有一处定义，顶栏 chip / 面板 Alert 不会再各说各话。
+   * 优先级 COMPILE_ERROR > NON_CONVERGENT/RESOURCE_LIMIT > HALTED > 运行中 > 已暂停。
+   */
+  runState(running: boolean): RunStateInfo {
+    const pick = (code: RunStateCode) => ({ code, ...RUN_STATE_TEXT[code] });
+    if (this.hasBlockingError) return pick("error");
+    if (this.settleOutcome === "oscillating") return pick("oscillating");
+    if (this.settleOutcome === "resource-limit") return pick("resource-limit");
+    if (this.halted()) return pick("halted");
+    if (running) return pick("running");
+    if (this.time > 0) return pick("paused");
+    return pick("idle");
+  }
+
   private indexOf(id: string): number {
     return this.nl.comps.findIndex((c) => c.id === id);
   }
@@ -427,6 +525,7 @@ export class Simulator {
   settle() {
     this.settling = true;
     this.unstable = false;
+    this.settleOutcome = "converged";
     this.queue.length = 0;
     this.head = 0;
     this.inq.fill(0);
@@ -475,6 +574,7 @@ export class Simulator {
       }
     }
     if (oscillated || budgetExhausted) this.unstable = true;
+    this.settleOutcome = oscillated ? "oscillating" : budgetExhausted ? "resource-limit" : "converged";
     this.settling = false;
     if (oscillated) {
       this.log("@settle", "检测到状态在最近迭代中重复：判定为振荡 (NON_CONVERGENT)", "warn");
