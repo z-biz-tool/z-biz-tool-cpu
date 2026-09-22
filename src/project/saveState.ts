@@ -24,14 +24,20 @@ export interface SaveState {
   currentRevision: number;
   /** 保存失败时的错误信息（label=failed 时显示） */
   error?: string;
-  /** 失败时可触发的动作 */
-  retry?: () => Promise<void>;
-  exportJson?: () => string;
-  cancelLeave?: () => void;
 }
 
 export const DEBOUNCE_MS = 500;
 export const MAX_QUEUE_MS = 2000;
+
+/** doc 02 §5.3：保存状态的页面语言，顶栏独立显示，不能用运行成功代替保存成功 */
+export const SAVE_STATE_TEXT: Record<SaveStateLabel, { label: string; detail: string; tone: "ok" | "info" | "warn" | "error" }> = {
+  unsaved: { label: "未保存", detail: "还没有写入过本地草稿。", tone: "info" },
+  pending: { label: "等待保存", detail: "有改动尚未落盘：停止编辑 0.5 秒后自动写入，连续编辑最长等 2 秒。", tone: "warn" },
+  saving: { label: "保存中", detail: "正在写入浏览器本地存储。", tone: "info" },
+  saved: { label: "已保存", detail: "改动已写入浏览器本地存储，刷新后能恢复到这一版。", tone: "ok" },
+  failed: { label: "尚未写入本地", detail: "本地存储写入失败：内存里的草稿还在，可以重试，或先导出 JSON 保住成果。", tone: "error" },
+  readonly: { label: "只读副本", detail: "另一个标签页正持有这份草稿，本副本不会覆盖它，可另存副本。", tone: "warn" },
+};
 
 /** 状态机输入事件 */
 export type SaveEvent =
@@ -49,11 +55,19 @@ export function nextSaveState(s: SaveState, e: SaveEvent): SaveState {
     case "flush-start":
       return { ...s, label: "saving" };
     case "flush-success":
-      return { ...s, label: "saved", savedRevision: e.revision, currentRevision: e.revision, error: undefined };
+    case "retry-success": {
+      // 只确认已提交的那一版：写入期间又改了话，新修订仍然挂着待保存
+      const currentRevision = Math.max(s.currentRevision, e.revision);
+      return {
+        ...s,
+        label: currentRevision === e.revision ? "saved" : "pending",
+        savedRevision: e.revision,
+        currentRevision,
+        error: undefined,
+      };
+    }
     case "flush-failed":
       return { ...s, label: "failed", error: e.error };
-    case "retry-success":
-      return { ...s, label: "saved", savedRevision: e.revision, currentRevision: e.revision, error: undefined };
     case "readonly":
       return { ...s, label: "readonly" };
   }

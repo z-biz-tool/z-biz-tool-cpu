@@ -1248,6 +1248,75 @@ ok:
     check(`RS: ${settleChecked} 套设计全部判为已收敛`, misjudged === "", misjudged);
   }
 
+  /* doc 02 §5.3：保存状态机、防抖落盘与诚实的失败语言 */
+  {
+    const { DEBOUNCE_MS, DebouncedSaver, SAVE_STATE_TEXT, nextSaveState } = await import("../src/project/saveState.ts");
+    const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    const blank = { label: "unsaved", savedRevision: 0, currentRevision: 0 } as any;
+
+    const s1 = nextSaveState(blank, { type: "edit", delta: 1 });
+    check("SV: 编辑先记修订并进入等待保存", s1.label === "pending" && s1.currentRevision === 1, JSON.stringify(s1));
+    const s2 = nextSaveState(s1, { type: "flush-start" });
+    check("SV: 写入中是独立状态", s2.label === "saving", s2.label);
+    const s3 = nextSaveState(s2, { type: "flush-success", revision: 1 });
+    check("SV: 只有提交后才报已保存", s3.label === "saved" && s3.savedRevision === 1, JSON.stringify(s3));
+
+    // 写入期间又改了：只确认已提交那一版，新修订继续挂着
+    let during: any = nextSaveState(s3, { type: "flush-start" });
+    during = nextSaveState(during, { type: "edit", delta: 1 });
+    during = nextSaveState(during, { type: "flush-success", revision: 1 });
+    check(
+      "SV: 写入期间的编辑不被撤销成已保存",
+      during.label === "pending" && during.savedRevision === 1 && during.currentRevision === 2,
+      JSON.stringify(during)
+    );
+
+    const failed = nextSaveState(during, { type: "flush-failed", error: "配额已满" });
+    check("SV: 失败保留原因且不丢修订", failed.label === "failed" && failed.error === "配额已满" && failed.currentRevision === 2, JSON.stringify(failed));
+    const retried = nextSaveState(failed, { type: "retry-success", revision: 2 });
+    check("SV: 重试成功追平修订并清掉错误", retried.label === "saved" && retried.savedRevision === 2 && retried.error === undefined, JSON.stringify(retried));
+    check("SV: 只读副本独立成态", nextSaveState(blank, { type: "readonly" }).label === "readonly");
+
+    const keys = Object.keys(SAVE_STATE_TEXT) as (keyof typeof SAVE_STATE_TEXT)[];
+    check("SV: 六种保存状态都有页面语言", keys.length === 6 && keys.every((k) => !!SAVE_STATE_TEXT[k].label && !!SAVE_STATE_TEXT[k].detail), keys.join("/"));
+    check("SV: 状态文案互不重复", new Set(keys.map((k) => SAVE_STATE_TEXT[k].label)).size === 6);
+    check("SV: 失败语言不冒充成功", !SAVE_STATE_TEXT.failed.label.includes("已保存") && SAVE_STATE_TEXT.failed.tone === "error", SAVE_STATE_TEXT.failed.label);
+
+    // 防抖：连续编辑合并成一次落盘，但最长等待后仍必须写
+    let coalesced = 0;
+    const sA = new DebouncedSaver(async () => { coalesced++; }, DEBOUNCE_MS, 10_000);
+    for (let i = 0; i < 10; i++) { sA.trigger(); await wait(3); }
+    await wait(DEBOUNCE_MS + 60);
+    check("SV: 停止编辑一个防抖窗口后落一次盘", coalesced === 1, "hits=" + coalesced);
+
+    let capped = 0;
+    const sB = new DebouncedSaver(async () => { capped++; }, 30, 50);
+    for (let i = 0; i < 12; i++) { sB.trigger(); await wait(10); }
+    sB.cancel();
+    check("SV: 连续编辑不能无限推迟落盘", capped >= 2, "hits=" + capped);
+
+    let manual = 0;
+    const sC = new DebouncedSaver(async () => { manual++; }, 5000, 5000);
+    sC.trigger();
+    await sC.flushNow();
+    check("SV: 手动刷写不等防抖", manual === 1, "hits=" + manual);
+    await sC.flushNow();
+    check("SV: 没有待写入内容时刷写不重复落盘", manual === 1, "hits=" + manual);
+
+    // 接线：store 的自动存档必须走上面这套，而不是每帧同步写
+    const { useEditor } = await import("../src/editor/store.ts");
+    useEditor.setState({ save: { label: "unsaved", savedRevision: 0, currentRevision: 0 } } as any);
+    useEditor.getState().newDesign();
+    const mid = useEditor.getState().save;
+    check("SV: 编辑器动作会标记待保存并排防抖", mid.label === "pending" && mid.currentRevision === 1, JSON.stringify(mid));
+    await wait(900);
+    const settled = useEditor.getState().save;
+    check("SV: 防抖到点自动提交", settled.label !== "pending" && settled.label !== "saving", JSON.stringify(settled));
+    check("SV: 写不进本地存储时不谎称已保存", settled.label === "failed" && !!settled.error, JSON.stringify(settled));
+    useEditor.getState().retrySave();
+    check("SV: 顶栏重试按钮的入口可用且同样诚实", useEditor.getState().save.label === "failed", JSON.stringify(useEditor.getState().save));
+  }
+
   // AT-01..AT-12 全验收矩阵
   const atModule = await import("../src/atCoverage.ts");
   const { existsSync: existsSync2, readFileSync: readFileSync2 } = await import("node:fs");

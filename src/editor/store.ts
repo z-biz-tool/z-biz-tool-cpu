@@ -14,6 +14,8 @@ import type { Badge, Progress } from "../challenges/progress.ts";
 import { assemble } from "../asm/assembler.ts";
 import type { AsmResult, ListingLine } from "../asm/assembler.ts";
 import { assemblesSample } from "../asm/samples.ts";
+import { DebouncedSaver, nextSaveState } from "../project/saveState.ts";
+import type { SaveState } from "../project/saveState.ts";
 import type { WorkshopState } from "../workshop/index.ts";
 import { addOrUpdate, findComponent, loadWorkshopLocal, removeVersion, saveWorkshopLocal } from "../workshop/index.ts";
 
@@ -90,6 +92,8 @@ export interface EditorState {
   asmListing: ListingLine[];
   /** IMP-13：作品工坊（本地持久化） */
   workshop: WorkshopState;
+  /** doc 02 §5.3：草稿落盘状态，独立于运行状态 */
+  save: SaveState;
 
   circuit(): Circuit;
   isRoot(): boolean;
@@ -158,6 +162,8 @@ export interface EditorState {
 
   saveTo(key: string): boolean;
   loadFrom(key: string): boolean;
+  /** 自动保存失败后重试；成功后状态回到「已保存·修订 N」 */
+  retrySave(): void;
   /** 直接载入一台现成设计（如参考 CPU） */
   loadDesign(design: Design): void;
   newDesign(): void;
@@ -202,10 +208,39 @@ function defaultParamsOf(type: string): Record<string, number | string | boolean
 const pinKey = (ref: PinRef) => ref.comp + "." + ref.pin;
 
 export const useEditor = create<EditorState>((set, get) => {
-  const initialDesign = loadSlot("autosave") ?? emptyDesign("自由搭建");
+  const bootedFromDraft = loadSlot("autosave");
+  const initialDesign = bootedFromDraft ?? emptyDesign("自由搭建");
   const initialProgress = loadProgress();
   const initialWorkshop = loadWorkshopLocal();
   let sim = new Simulator(initialDesign, currentCircuit(initialDesign, "root"));
+
+  /* ------------------------------------------------------------------ *
+   * doc 02 §5.3：自动存档走保存状态机
+   *  - 不再每次改动都同步序列化整个设计（拖拽时每帧写一遍 localStorage）
+   *  - 停止编辑 500ms 提交，连续编辑最长等 2s
+   *  - 只有真正写入本地后才报「已保存」，失败常驻提示并可重试
+   * ------------------------------------------------------------------ */
+  const commitDraft = () => {
+    const rev = get().save.currentRevision;
+    set({ save: nextSaveState(get().save, { type: "flush-start" }) });
+    const ok = saveSlot("autosave", get().design);
+    set({
+      save: nextSaveState(
+        get().save,
+        ok ? { type: "flush-success", revision: rev } : { type: "flush-failed", error: "浏览器本地存储写入失败（配额已满或被禁用）" }
+      ),
+    });
+  };
+  const draftSaver = new DebouncedSaver(async () => commitDraft());
+  /** 一次会丢就心疼的编辑：记修订 + 排防抖 */
+  const touchDraft = () => {
+    set({ save: nextSaveState(get().save, { type: "edit", delta: 1 }) });
+    draftSaver.trigger();
+  };
+  if (typeof window !== "undefined") {
+    // 关页面前把最后一个防抖窗口里的改动写完（异步保存不作保障，但能救回大多数）
+    window.addEventListener("pagehide", () => draftSaver.flushNow());
+  }
 
   /** 结构变更后统一入口：换新 design 引用 → 重建仿真器 → 自动存档 */
   const after = (label?: string, keepState = true) => {
@@ -215,7 +250,7 @@ export const useEditor = create<EditorState>((set, get) => {
     sim = new Simulator(design, currentCircuit(design, st.view));
     if (prev) sim.restoreState(prev);
     set({ design, sim, tick: st.tick + 1, simRev: st.simRev + 1, result: null });
-    if (label) saveSlot("autosave", design);
+    if (label) touchDraft();
   };
 
   const mutate = (fn: (c: Circuit) => void, label = "修改") => {
@@ -229,7 +264,7 @@ export const useEditor = create<EditorState>((set, get) => {
     const st = get();
     fn(currentCircuit(st.design, st.view));
     set({ design: { ...st.design }, tick: st.tick + 1, result: null });
-    if (label) saveSlot("autosave", st.design);
+    if (label) touchDraft();
   };
 
   /** 整体替换设计（撤销/重做/载入/进关卡） */
@@ -238,7 +273,7 @@ export const useEditor = create<EditorState>((set, get) => {
     const v = view === "root" || design.defs.some((d) => d.id === view) ? view : "root";
     sim = new Simulator(design, currentCircuit(design, v));
     set({ design, view: v, sim, tick: st.tick + 1, simRev: st.simRev + 1, result: null });
-    saveSlot("autosave", design);
+    touchDraft();
   };
 
   return {
@@ -272,6 +307,9 @@ export const useEditor = create<EditorState>((set, get) => {
     asmWords: [],
     asmListing: [],
     workshop: initialWorkshop,
+    save: bootedFromDraft
+      ? { label: "saved", savedRevision: 0, currentRevision: 0 }
+      : { label: "unsaved", savedRevision: 0, currentRevision: 0 },
 
     circuit() {
       const st = get();
@@ -830,6 +868,9 @@ export const useEditor = create<EditorState>((set, get) => {
 
     saveTo(key) {
       return saveSlot(key || "slot", get().design);
+    },
+    retrySave() {
+      commitDraft();
     },
     loadFrom(key) {
       const design = loadSlot(key);

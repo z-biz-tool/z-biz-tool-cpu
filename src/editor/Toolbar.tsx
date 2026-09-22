@@ -1,5 +1,6 @@
 import { Segmented, Tooltip } from "antd";
 import { RUN_STATE_TEXT, type RunStateCode } from "../core/sim.ts";
+import { SAVE_STATE_TEXT } from "../project/saveState.ts";
 import { designCost, useEditor } from "./store.ts";
 
 /* ------------------------------------------------------------------ *
@@ -20,6 +21,8 @@ export default function Toolbar() {
   const undo = useEditor((s) => s.undo);
   const redo = useEditor((s) => s.redo);
   const selection = useEditor((s) => s.selection);
+  /** doc 02 §5.3：保存状态独立于运行状态常驻顶栏 */
+  const save = useEditor((s) => s.save);
   const st = useEditor.getState;
 
   const runInfo = { code: runCode as RunStateCode, ...RUN_STATE_TEXT[runCode as RunStateCode] };
@@ -106,6 +109,26 @@ export default function Toolbar() {
             {runInfo.label}
           </span>
         </Tooltip>
+        {(() => {
+          const info = SAVE_STATE_TEXT[save.label];
+          return (
+            <>
+              <Tooltip title={save.error ? `${info.detail}（${save.error}）` : info.detail}>
+                <span className={"run-state tone-" + info.tone} data-save-state={save.label} role="status">
+                  {info.label}
+                  {save.label === "saved" && save.savedRevision > 0 ? ` · 修订 ${save.savedRevision}` : ""}
+                </span>
+              </Tooltip>
+              {save.label === "failed" && (
+                <Tooltip title="内存里的草稿还在，再试一次写入本地">
+                  <button className="btn" onClick={() => st().retrySave()}>
+                    重试保存
+                  </button>
+                </Tooltip>
+              )}
+            </>
+          );
+        })()}
         <span className="stat">
           周期 <b className="mono">{simTime}</b>
         </span>
