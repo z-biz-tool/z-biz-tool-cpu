@@ -6,6 +6,8 @@
  * 只确认已提交修订，新修订仍显示待保存；手动保存要求刷写当前修订。
  *
  * 失败时：常驻错误提示，保留内存草稿，提供重试、导出 JSON、取消离开。
+ * 只读时（doc 02 §5.3 多标签页）：本页不再写共享草稿，改动作废式提示，
+ * 再多的编辑也不会把状态倒回「等待保存」。
  * ------------------------------------------------------------------ */
 
 export type SaveStateLabel =
@@ -36,7 +38,7 @@ export const SAVE_STATE_TEXT: Record<SaveStateLabel, { label: string; detail: st
   saving: { label: "保存中", detail: "正在写入浏览器本地存储。", tone: "info" },
   saved: { label: "已保存", detail: "改动已写入浏览器本地存储，刷新后能恢复到这一版。", tone: "ok" },
   failed: { label: "尚未写入本地", detail: "本地存储写入失败：内存里的草稿还在，可以重试，或先导出 JSON 保住成果。", tone: "error" },
-  readonly: { label: "只读副本", detail: "另一个标签页正持有这份草稿，本副本不会覆盖它，可另存副本。", tone: "warn" },
+  readonly: { label: "只读副本", detail: "另一个标签页更新过这份草稿，本页已停止自动存档：改动留在内存和冲突副本里，不会覆盖对方，也不会丢。", tone: "warn" },
 };
 
 /** 状态机输入事件 */
@@ -46,11 +48,13 @@ export type SaveEvent =
   | { type: "flush-success"; revision: number }
   | { type: "flush-failed"; error: string }
   | { type: "retry-success"; revision: number }
-  | { type: "readonly" };
+  | { type: "readonly"; error?: string };
 
 export function nextSaveState(s: SaveState, e: SaveEvent): SaveState {
   switch (e.type) {
     case "edit":
+      // 停写状态下再改也只报「只读草稿」：此时并不会落盘，显示「等待保存」就是撒谎
+      if (s.label === "readonly") return { ...s, currentRevision: s.currentRevision + e.delta };
       return { ...s, currentRevision: s.currentRevision + e.delta, label: s.savedRevision === s.currentRevision + e.delta ? "saved" : "pending" };
     case "flush-start":
       return { ...s, label: "saving" };
@@ -69,7 +73,7 @@ export function nextSaveState(s: SaveState, e: SaveEvent): SaveState {
     case "flush-failed":
       return { ...s, label: "failed", error: e.error };
     case "readonly":
-      return { ...s, label: "readonly" };
+      return { ...s, label: "readonly", error: e.error ?? s.error };
   }
 }
 

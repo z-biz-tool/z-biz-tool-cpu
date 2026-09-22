@@ -4,6 +4,7 @@ import { CircuitBuilder } from "../core/build.ts";
 import { customCost, defOf, pinProblem, totalCost } from "../core/custom.ts";
 import { baseDef, defaultParams } from "../core/registry.ts";
 import { cloneDesign, emptyDesign, loadSlot, parse, saveSlot, serialize } from "../core/serialize.ts";
+import { DraftWriter } from "../core/draft.ts";
 import type { Circuit, CompInstance, CustomDef, Design, PinRef, Point, Rot, Wire } from "../core/types.ts";
 import { GRID, uid } from "../core/types.ts";
 import { levelById, levelDesign } from "../challenges/levels.ts";
@@ -164,6 +165,12 @@ export interface EditorState {
   loadFrom(key: string): boolean;
   /** 自动保存失败后重试；成功后状态回到「已保存·修订 N」 */
   retrySave(): void;
+  /** 多标签页冲突后「以本页为准」：接受对方的草稿作基线，本页重新拿回写入权 */
+  takeOverDraft(): void;
+  /** 冲突副本是否真的存下来了（顶栏据此决定按钮能不能点） */
+  hasConflictCopy(): boolean;
+  /** 读出本页停写时另存的冲突副本；不因此拿回写入权 */
+  openConflictCopy(): boolean;
   /** 直接载入一台现成设计（如参考 CPU） */
   loadDesign(design: Design): void;
   newDesign(): void;
@@ -208,28 +215,38 @@ function defaultParamsOf(type: string): Record<string, number | string | boolean
 const pinKey = (ref: PinRef) => ref.comp + "." + ref.pin;
 
 export const useEditor = create<EditorState>((set, get) => {
-  const bootedFromDraft = loadSlot("autosave");
-  const initialDesign = bootedFromDraft ?? emptyDesign("自由搭建");
-  const initialProgress = loadProgress();
-  const initialWorkshop = loadWorkshopLocal();
-  let sim = new Simulator(initialDesign, currentCircuit(initialDesign, "root"));
-
   /* ------------------------------------------------------------------ *
    * doc 02 §5.3：自动存档走保存状态机
    *  - 不再每次改动都同步序列化整个设计（拖拽时每帧写一遍 localStorage）
    *  - 停止编辑 500ms 提交，连续编辑最长等 2s
    *  - 只有真正写入本地后才报「已保存」，失败常驻提示并可重试
+   *  - 别的标签页更新过草稿就立即停写，另存冲突副本转入只读（见 core/draft.ts）
    * ------------------------------------------------------------------ */
+  const draft = new DraftWriter();
+  const bootedFromDraft = draft.load();
+  const initialDesign = bootedFromDraft ?? emptyDesign("自由搭建");
+  const initialProgress = loadProgress();
+  const initialWorkshop = loadWorkshopLocal();
+  let sim = new Simulator(initialDesign, currentCircuit(initialDesign, "root"));
+
+  const conflictNote = (res: { copyKey: string; copyName: string; by: string }) => {
+    const who = res.by ? `对方那一版写于 ${res.by}。` : "";
+    if (!res.copyKey)
+      return `另一个标签页更新了这份草稿，本页已停止自动存档。${who}冲突副本也没能写进本地存储，请立即导出 JSON 保住成果。`;
+    return `另一个标签页更新了这份草稿，本页已停止自动存档。${who}本页改动已另存为「${res.copyName}」，可接管草稿继续，或打开冲突副本对比。`;
+  };
+
   const commitDraft = () => {
     const rev = get().save.currentRevision;
     set({ save: nextSaveState(get().save, { type: "flush-start" }) });
-    const ok = saveSlot("autosave", get().design);
-    set({
-      save: nextSaveState(
-        get().save,
-        ok ? { type: "flush-success", revision: rev } : { type: "flush-failed", error: "浏览器本地存储写入失败（配额已满或被禁用）" }
-      ),
-    });
+    const res = draft.commit(get().design);
+    if (res.kind === "written") {
+      set({ save: nextSaveState(get().save, { type: "flush-success", revision: rev }) });
+    } else if (res.kind === "failed") {
+      set({ save: nextSaveState(get().save, { type: "flush-failed", error: res.error }) });
+    } else {
+      set({ save: nextSaveState(get().save, { type: "readonly", error: conflictNote(res) }) });
+    }
   };
   const draftSaver = new DebouncedSaver(async () => commitDraft());
   /** 一次会丢就心疼的编辑：记修订 + 排防抖 */
@@ -871,6 +888,22 @@ export const useEditor = create<EditorState>((set, get) => {
     },
     retrySave() {
       commitDraft();
+    },
+    takeOverDraft() {
+      // 用户显式选择「以本页为准」：对方的那一版此后作为新基线
+      draft.resume();
+      commitDraft();
+    },
+    hasConflictCopy() {
+      return !!draft.conflictInfo()?.copyKey;
+    },
+    openConflictCopy() {
+      const info = draft.conflictInfo();
+      if (!info?.copyKey) return false;
+      const design = loadSlot(info.copyKey);
+      if (!design) return false;
+      replace(design, "root");
+      return true;
     },
     loadFrom(key) {
       const design = loadSlot(key);

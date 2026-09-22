@@ -1317,6 +1317,136 @@ ok:
     check("SV: 顶栏重试按钮的入口可用且同样诚实", useEditor.getState().save.label === "failed", JSON.stringify(useEditor.getState().save));
   }
 
+  /* doc 02 §5.3：多标签页草稿写入权 —— 写前比对，冲突就停写并留副本，绝不静默覆盖。
+   * 用 ?tab=b 让 Node 把 store.ts 当第二个模块加载，代表第二个标签页；
+   * 两个实例共用一份假 localStorage，跑的是页面里那套真实代码路径。 */
+  {
+    const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+    const store = new Map<string, string>();
+    (globalThis as any).window = {
+      localStorage: {
+        getItem: (k: string) => store.get(k) ?? null,
+        setItem: (k: string, v: string) => void store.set(k, v),
+        removeItem: (k: string) => void store.delete(k),
+        key: (i: number) => [...store.keys()][i] ?? null,
+        get length() {
+          return store.size;
+        },
+      },
+      addEventListener: () => {},
+    };
+
+    const ser = await import("../src/core/serialize.ts");
+    const { DraftWriter } = await import("../src/core/draft.ts");
+    const { useEditor: tabA } = await import("../src/editor/store.ts");
+    // 带 query 的同路径在 Node 眼里是另一个模块 —— 这就是「第二个标签页」
+    const secondTab = "../src/editor/store.ts?tab=b";
+    const tabB: typeof tabA = (await import(secondTab) as { useEditor: typeof tabA }).useEditor;
+    check("MT: 第二个标签页确实是独立实例", tabB !== tabA);
+
+    // A 先改：正常自动存档
+    tabA.getState().newDesign();
+    await wait(900);
+    check("MT: 本页正常写入后报已保存", tabA.getState().save.label === "saved", JSON.stringify(tabA.getState().save));
+    const draftAfterA = ser.readSlotText("autosave");
+    check("MT: 草稿确实落在本地存储", !!draftAfterA);
+
+    // B 后改：它 boot 时读到的原文已经不是存储里那份 → 停写 + 冲突副本
+    tabB.getState().newDesign();
+    await wait(900);
+    const bSave = tabB.getState().save;
+    check("MT: 后写的标签页转入只读草稿", bSave.label === "readonly", JSON.stringify(bSave));
+    check("MT: 只读提示说清了副本去处", /冲突副本/.test(bSave.error ?? ""), bSave.error ?? "");
+    check("MT: 停写不会覆盖对方那一版草稿", ser.readSlotText("autosave") === draftAfterA);
+    const copies = () => ser.listSlots().filter((s) => s.key.startsWith("conflict-"));
+    check("MT: 冲突副本单独存了一份", copies().some((s) => s.name.includes("冲突副本")), ser.listSlots().map((s) => s.key).join(","));
+    check(
+      "MT: 没有靠锁标记或心跳假装互斥",
+      ![...store.keys()].some((k) => /lock|heartbeat|owner|tab-?id/i.test(k.replace(/^z-biz-tool-cpu:slot:conflict-[a-z0-9]+$/, ""))),
+      [...store.keys()].join(",")
+    );
+
+    // 停写之后再编辑仍只报只读：这一刻根本不会落盘，显示「等待保存」就是撒谎
+    tabB.getState().placeComp("and", 3, 3);
+    check(
+      "MT: 停写时编辑的瞬时状态也不报等待保存",
+      tabB.getState().save.label === "readonly",
+      JSON.stringify(tabB.getState().save)
+    );
+    await wait(900);
+    const bAfter = tabB.getState().save;
+    check("MT: 停写后的编辑不冒充等待保存", bAfter.label === "readonly" && bAfter.currentRevision > bSave.currentRevision, JSON.stringify(bAfter));
+    check("MT: 反复编辑也只叠一份副本", copies().length === 1);
+    check("MT: 停写期间对方草稿始终没动", ser.readSlotText("autosave") === draftAfterA);
+
+    // 用户显式接管：以本页为准，过时的副本随之回收
+    tabB.getState().takeOverDraft();
+    const bTaken = tabB.getState().save;
+    check("MT: 接管后本页重新拿回写入权", bTaken.label === "saved" && bTaken.savedRevision === bTaken.currentRevision, JSON.stringify(bTaken));
+    check("MT: 接管后草稿确实是本页那一版", ser.readSlotText("autosave") !== draftAfterA);
+    check("MT: 接管后过时的冲突副本被回收", copies().length === 0);
+
+    // 反过来：A 现在是落后的一方，它下一次写必然检测到
+    const bDraft = ser.readSlotText("autosave");
+    tabA.getState().newDesign();
+    await wait(900);
+    check(
+      "MT: 写入权判定对两边对称",
+      tabA.getState().save.label === "readonly" && tabB.getState().save.label === "saved" && ser.readSlotText("autosave") === bDraft,
+      JSON.stringify([tabA.getState().save.label, tabB.getState().save.label])
+    );
+
+    // 只读地打开副本：看得见对方的比较，不该顺手偷走写入权
+    const opened = tabA.getState().openConflictCopy();
+    check("MT: 能打开自己的冲突副本", opened && tabA.getState().design.name.includes("冲突副本"), tabA.getState().design.name);
+    // 打开副本只是「看看」：接着编辑也不该把写入权顺带拿回去
+    tabA.getState().placeComp("or", 6, 6);
+    await wait(900);
+    check(
+      "MT: 打开副本后继续编辑仍不接管草稿",
+      tabA.getState().save.label === "readonly" && ser.readSlotText("autosave") === bDraft,
+      tabA.getState().save.label + " / 草稿被改写了=" + (ser.readSlotText("autosave") !== bDraft)
+    );
+    check("MT: 副本里的改动没有丢", tabA.getState().design.root.comps.length > 0);
+    tabA.getState().takeOverDraft();
+    check("MT: 接管后能继续正常存档", tabA.getState().save.label === "saved");
+
+    // 副本自己也写不进去时（配额满）：如实指向导出，含糊的「只读」不算交代清楚
+    const brokenStorage = {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => {
+        if (k.includes("conflict")) throw new Error("QuotaExceededError");
+        store.set(k, v);
+      },
+      removeItem: (k: string) => void store.delete(k),
+      key: () => null,
+      get length() {
+        return store.size;
+      },
+    };
+    (globalThis as any).window.localStorage = brokenStorage;
+    const orphan = new DraftWriter("orphan");
+    const firstWrite = orphan.commit(ser.emptyDesign("副本写不进去"));
+    store.set(ser.SLOT_PREFIX + "orphan", ser.serialize(ser.emptyDesign("对方的一版")));
+    const secondWrite = orphan.commit(ser.emptyDesign("副本写不进去"));
+    check("MT: 无冲突时照常写入", firstWrite.kind === "written", JSON.stringify(firstWrite));
+    check(
+      "MT: 副本也写不进时明确报出",
+      secondWrite.kind === "conflict" && secondWrite.copyKey === "" && secondWrite.copyName === "",
+      JSON.stringify(secondWrite)
+    );
+    check("MT: 副本失败也没动对方草稿", store.get(ser.SLOT_PREFIX + "orphan")?.includes("对方的一版") === true);
+    // 停写之后不再反复尝试写副本，只保持同一个结论
+    const third = orphan.commit(ser.emptyDesign("副本写不进去"));
+    check(
+      "MT: 停写后重复提交保持同一结论且不重试写副本",
+      third.kind === "blocked" && third.copyKey === "" && third.by === (secondWrite.kind === "conflict" ? secondWrite.by : "?"),
+      JSON.stringify(third)
+    );
+
+    delete (globalThis as any).window;
+  }
+
   // AT-01..AT-12 全验收矩阵
   const atModule = await import("../src/atCoverage.ts");
   const { existsSync: existsSync2, readFileSync: readFileSync2 } = await import("node:fs");

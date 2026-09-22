@@ -126,6 +126,20 @@ export default function Toolbar() {
                   </button>
                 </Tooltip>
               )}
+              {save.label === "readonly" && (
+                <>
+                  <Tooltip title="以本页为准：把另一个标签页的草稿当作新基线，本页重新自动存档（此后对方那一版会被本页覆盖）">
+                    <button className="btn" onClick={() => st().takeOverDraft()}>
+                      接管草稿
+                    </button>
+                  </Tooltip>
+                  <Tooltip title="先看看本页停写时另存的冲突副本再决定，打开它不会改动对方的草稿">
+                    <button className="btn" disabled={!st().hasConflictCopy()} onClick={() => st().openConflictCopy()}>
+                      打开冲突副本
+                    </button>
+                  </Tooltip>
+                </>
+              )}
             </>
           );
         })()}

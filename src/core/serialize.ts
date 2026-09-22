@@ -215,31 +215,53 @@ function hasStorage() {
   return typeof window !== "undefined" && !!window.localStorage;
 }
 
-export function saveSlot(key: string, design: Design): boolean {
+export const SLOT_PREFIX = STORAGE_PREFIX + "slot:";
+
+/** 存档位的原文；读不到（含无本地存储的环境）一律 null */
+export function readSlotText(key: string): string | null {
+  if (!hasStorage()) return null;
+  return window.localStorage.getItem(SLOT_PREFIX + key);
+}
+
+/** 原样写入存档位；配额满 / 禁用存储时返回 false，调用方要如实报错 */
+export function writeSlotText(key: string, text: string): boolean {
   if (!hasStorage()) return false;
   try {
-    window.localStorage.setItem(STORAGE_PREFIX + "slot:" + key, serialize(design));
+    window.localStorage.setItem(SLOT_PREFIX + key, text);
     return true;
   } catch {
     return false;
   }
 }
 
+/** 只取存档文件的时间戳，不做整份设计的校验（冲突提示里要说是谁写的） */
+export function slotSavedAt(text: string): string {
+  try {
+    const raw = JSON.parse(text) as Partial<SaveFile>;
+    return typeof raw.savedAt === "string" ? raw.savedAt : "";
+  } catch {
+    return "";
+  }
+}
+
+export function saveSlot(key: string, design: Design): boolean {
+  return writeSlotText(key, serialize(design));
+}
+
 export function loadSlot(key: string): Design | undefined {
-  if (!hasStorage()) return undefined;
-  const text = window.localStorage.getItem(STORAGE_PREFIX + "slot:" + key);
+  const text = readSlotText(key);
   if (!text) return undefined;
   return parse(text).design;
 }
 
 export function deleteSlot(key: string) {
   if (!hasStorage()) return;
-  window.localStorage.removeItem(STORAGE_PREFIX + "slot:" + key);
+  window.localStorage.removeItem(SLOT_PREFIX + key);
 }
 
 export function listSlots(): SlotInfo[] {
   if (!hasStorage()) return [];
-  const prefix = STORAGE_PREFIX + "slot:";
+  const prefix = SLOT_PREFIX;
   const out: SlotInfo[] = [];
   for (let i = 0; i < window.localStorage.length; i++) {
     const k = window.localStorage.key(i);
