@@ -3180,18 +3180,20 @@ ok:
     check("PLATTER RD 给出磁头下方扇区", q === idx + 1, `q=${q} idx=${idx}`);
   }
 
-  /* 存储书首个可玩关卡：M2-1 会漏的电容（发现式学习） */
+  /* 存储书全量通用环：每关参考解答全过 + 裸骨架不能白拿通关 */
   {
-    const m21 = STORAGE_LEVELS.find((l) => l.id === "m2-1-leakycap");
-    check("BK: M2-1 已上架存储书", !!m21);
     check("BK: CPU 书仍是 31 关（存储书不进 LEVELS）", LEVELS.length === 31, `len=${LEVELS.length}`);
-    if (m21) {
-      const naive = runLevelTests(m21, levelDesign(m21));
-      const leakCase = naive.outcomes.find((o) => o.name.includes("60"));
-      check("BK: M2-1 骨架过短等用例、败长等用例", !naive.pass && !!leakCase && !leakCase.pass, JSON.stringify(naive.outcomes.map((o) => [o.name, o.pass])));
-      const sol = solutionDesign(m21);
-      const judged = sol ? runLevelTests(m21, sol) : undefined;
-      check("BK: M2-1 参考解答全过", !!judged && judged.pass, JSON.stringify(judged?.outcomes.map((o) => [o.name, o.pass])));
+    check("BK: 存储书 7 关上架", STORAGE_LEVELS.length === 7, `len=${STORAGE_LEVELS.length}`);
+    for (const l of STORAGE_LEVELS) {
+      const sol = solutionDesign(l);
+      const judged = sol ? runLevelTests(l, sol) : undefined;
+      check(
+        `BK书: ${l.id} 参考解答全过`,
+        !!judged && judged.pass,
+        JSON.stringify((judged?.outcomes ?? []).filter((o) => !o.pass).map((o) => o.name))
+      );
+      const naive = runLevelTests(l, levelDesign(l));
+      check(`BK书: ${l.id} 裸骨架不能白拿通关`, !naive.pass, "");
     }
   }
 

@@ -1191,6 +1191,107 @@ export const LEVEL_IDS = LEVELS.map((l) => l.id);
  * 母本：z-how-linux-runs/memory_work/，序列草案：_doc/全量设计/08。
  * ================================================================== */
 
+/* ---------------- 世界 M1 存就是状态 ---------------- */
+
+const M1: Level[] = [
+  {
+    id: "m1-1-norlatch",
+    tier: 6,
+    name: "两个非门锁住一位",
+    brief: "用两只或非门交叉耦合，做出能写、能保持 32 拍以上的一位：S 置 1、R 置 0，撒手后 Q 不变。",
+    teach:
+      "最原始的存储不需要电容：两个或非门互相咬住对方的输出，就成一个双稳态——SRAM 的细胞。" +
+      "S=R=0 时电路『记得』上次是谁最后说话；S=R=1 是禁态（两个输出一起掉 0），别碰。",
+    available: ["input", "output", "clock", "nor", "nand", "not", "and", "or", "const"],
+    skeleton: () =>
+      circuit([
+        clkSrc("CLK", 0, 0),
+        ioIn("S", 4, 1),
+        ioIn("R", 8, 1),
+        ioOut("Q", 40, 0),
+        ioOut("QN", 40, 4),
+      ]),
+    tests: [
+      {
+        name: "置 1 后保持 32 拍",
+        phases: [
+          { inputs: { S: 1, R: 0 }, steps: 1 },
+          { inputs: { S: 0, R: 0 }, steps: 32 },
+        ],
+        outputs: { Q: 1, QN: 0 },
+      },
+      {
+        name: "再置 0 后保持 32 拍",
+        phases: [
+          { inputs: { S: 1, R: 0 }, steps: 1 },
+          { inputs: { S: 0, R: 1 }, steps: 1 },
+          { inputs: { S: 0, R: 0 }, steps: 32 },
+        ],
+        outputs: { Q: 0, QN: 1 },
+      },
+    ],
+    hint: "Q = NOR(R, Q̄)，Q̄ = NOR(S, Q)。交叉互相喂，谁也松不开谁。",
+  },
+  {
+    id: "m1-2-decode4",
+    tier: 6,
+    name: "4×4 阵列与译码",
+    brief:
+      "四格 C0..C3（各 4 位寄存器）就是一座小阵列。用译码器把 2 位地址展开成四根字线：WE=1 时写入地址选中的一格；DOUT 永远给出地址选中的那格。",
+    teach:
+      "一根字线开一行，一根位线过一行——译码器是把『地址』翻译成『哪一格』的翻译官。" +
+      "写走译码器+WE，读走多路选择器。RAM 内部就是这套机构。",
+    available: ["input", "output", "clock", "demux", "mux", "reg", "and", "or", "not", "const"],
+    skeleton: () =>
+      circuit([
+        clkSrc("CLK", 0, 0),
+        ioIn("ADDR", 4, 2),
+        ioIn("DIN", 8, 4),
+        ioIn("WE", 14, 1),
+        seqComp("C0", 20, 0, "reg", 4),
+        seqComp("C1", 20, 5, "reg", 4),
+        seqComp("C2", 20, 10, "reg", 4),
+        seqComp("C3", 20, 15, "reg", 4),
+        ioOut("DOUT", 48, 6, 4),
+      ]),
+    tests: [
+      {
+        name: "写 C0=0x5 再读回",
+        phases: [
+          { inputs: { ADDR: 0, DIN: 5, WE: 1 }, steps: 1 },
+          { inputs: { ADDR: 0, DIN: 0, WE: 0 }, steps: 1 },
+        ],
+        outputs: { DOUT: 5 },
+      },
+      {
+        name: "写 C1=0xA 再读回",
+        phases: [
+          { inputs: { ADDR: 1, DIN: 10, WE: 1 }, steps: 1 },
+          { inputs: { ADDR: 1, DIN: 0, WE: 0 }, steps: 1 },
+        ],
+        outputs: { DOUT: 10 },
+      },
+      {
+        name: "写 C2=0x3 再读回",
+        phases: [
+          { inputs: { ADDR: 2, DIN: 3, WE: 1 }, steps: 1 },
+          { inputs: { ADDR: 2, DIN: 0, WE: 0 }, steps: 1 },
+        ],
+        outputs: { DOUT: 3 },
+      },
+      {
+        name: "写 C3=0xF 再读回",
+        phases: [
+          { inputs: { ADDR: 3, DIN: 15, WE: 1 }, steps: 1 },
+          { inputs: { ADDR: 3, DIN: 0, WE: 0 }, steps: 1 },
+        ],
+        outputs: { DOUT: 15 },
+      },
+    ],
+    hint: "译码器 sel 接 ADDR，四根输出各 AND 一把 WE 就是四根写使能；读用 4 选 1 MUX。",
+  },
+];
+
 const M2: Level[] = [
   {
     id: "m2-1-leakycap",
@@ -1230,9 +1331,185 @@ const M2: Level[] = [
     ],
     hint: "电容每 16 拍漏一级电，等 60 拍就是漏光。唯一的办法：别让它闲着——想办法不断地把数据写回去。",
   },
+  {
+    id: "m2-2-destructive",
+    tier: 6,
+    name: "读即毁",
+    brief:
+      "这回电容没有数据线：写与读都只能走位线 BL，而 BL 上只有感应放大器能给出电平。把『预充电 → 放大 → 反复开字线』的回路搭起来，读 6 次数据还在。",
+    teach:
+      "DRAM 的读是破坏性的：字线一开，电容把电荷摊到位线上，自己掉半级。" +
+      "感应放大器趁半电平还没塌，把它拉成满幅、顺势写回单元——『读』其实是『读-放大-回写』三合一。" +
+      "没有感放，开字线的沿上位线没人顶，电荷直接被毁。",
+    available: ["input", "output", "clock", "CAPCELL", "SENSEAMP", "or", "and", "not"],
+    skeleton: () =>
+      circuit([
+        clkSrc("CLK", 0, 0),
+        ioIn("EN", 4, 1),
+        ioIn("SE", 8, 1),
+        comp("cap", "CAPCELL", 14, 2, { leakN: 999 }, { name: "CAP" }),
+        ioOut("Q", 40, 2, 2),
+      ]),
+    tests: [
+      {
+        name: "预充电半电平进单元，放大成满幅",
+        phases: [
+          { inputs: { EN: 1, SE: 0 }, steps: 1 },
+          { inputs: { EN: 1, SE: 1 }, steps: 3 },
+        ],
+        outputs: { Q: 2 },
+      },
+      {
+        name: "反复开字线读 6 次，数据仍在",
+        phases: [
+          { inputs: { EN: 1, SE: 0 }, steps: 1 },
+          { inputs: { EN: 1, SE: 1 }, steps: 1 },
+          { inputs: { EN: 0 }, steps: 1 },
+          { inputs: { EN: 1 }, steps: 1 },
+          { inputs: { EN: 0 }, steps: 1 },
+          { inputs: { EN: 1 }, steps: 1 },
+          { inputs: { EN: 0 }, steps: 1 },
+          { inputs: { EN: 1 }, steps: 1 },
+          { inputs: { EN: 0 }, steps: 1 },
+          { inputs: { EN: 1 }, steps: 1 },
+          { inputs: { EN: 0 }, steps: 1 },
+          { inputs: { EN: 1 }, steps: 1 },
+        ],
+        outputs: { Q: 2 },
+      },
+    ],
+    hint: "SA 的 SE=0 输出 VDD/2（预充电），SE=1 把 IN 上的电平拉成满幅。CAP 的 Q → SA 的 IN，SA 的 OUT → CAP 的 BL，闭环就成了。",
+  },
+  {
+    id: "m2-3-refresh",
+    tier: 6,
+    name: "刷新调度",
+    brief:
+      "四格电容 C0..C3 每 96 拍漏一级，撑不过 200 拍——除非有人不停把它们逐行写回去。刷新控制器 REF 已就位（每 8 拍行号 +1）：搭出『逐行刷新 + 随时写入』的回路，让四个值都活着。",
+    teach:
+      "64ms ÷ 8192 行，就是每行必须在漏光前被轮到一次——刷新周期的数学来历。" +
+      "REFCTRL 只给行号，执行靠你：行号译码开字线，位线用单元自己的 Q 回馈，自己写回自己。" +
+      "写入与刷新共用一根字线：WE 命中地址时写新值，REF 命中行号时回写旧值。",
+    available: ["input", "output", "clock", "CAPCELL", "REFCTRL", "demux", "mux", "and", "or", "not", "const", "cmp"],
+    skeleton: () =>
+      circuit([
+        clkSrc("CLK", 0, 0),
+        ioIn("ADDR", 4, 2),
+        ioIn("D", 8, 2),
+        ioIn("WE", 12, 1),
+        comp("ref", "REFCTRL", 8, 20, { addrBits: 2, window: 8 }, { name: "REF" }),
+        comp("c0", "CAPCELL", 22, 0, { leakN: 96 }, { name: "C0" }),
+        comp("c1", "CAPCELL", 22, 5, { leakN: 96 }, { name: "C1" }),
+        comp("c2", "CAPCELL", 22, 10, { leakN: 96 }, { name: "C2" }),
+        comp("c3", "CAPCELL", 22, 15, { leakN: 96 }, { name: "C3" }),
+        ioOut("Q0", 46, 0, 2),
+        ioOut("Q1", 46, 5, 2),
+        ioOut("Q2", 46, 10, 2),
+        ioOut("Q3", 46, 15, 2),
+      ]),
+    tests: [
+      {
+        name: "写满四格，撑过 200 拍",
+        phases: [
+          { inputs: { ADDR: 0, D: 2, WE: 1 }, steps: 1 },
+          { inputs: { ADDR: 1, D: 2, WE: 1 }, steps: 1 },
+          { inputs: { ADDR: 2, D: 2, WE: 1 }, steps: 1 },
+          { inputs: { ADDR: 3, D: 2, WE: 1 }, steps: 1 },
+          { inputs: { ADDR: 0, D: 0, WE: 0 }, steps: 200 },
+        ],
+        outputs: { Q0: 2, Q1: 2, Q2: 2, Q3: 2 },
+      },
+      {
+        name: "中途改写一格，各格都活着",
+        phases: [
+          { inputs: { ADDR: 0, D: 2, WE: 1 }, steps: 1 },
+          { inputs: { ADDR: 1, D: 2, WE: 1 }, steps: 1 },
+          { inputs: { ADDR: 2, D: 1, WE: 1 }, steps: 1 },
+          { inputs: { ADDR: 3, D: 2, WE: 1 }, steps: 1 },
+          { inputs: { ADDR: 1, D: 1, WE: 1 }, steps: 1 },
+          { inputs: { ADDR: 0, D: 0, WE: 0 }, steps: 100 },
+        ],
+        outputs: { Q0: 2, Q1: 1, Q2: 1, Q3: 2 },
+      },
+    ],
+    hint: "每格 EN = REF 行号命中 OR 写地址命中；BL = WE ? D : 自己的 Q。刷新就是自己写回自己。",
+  },
+  {
+    id: "m2-4-wordline",
+    tier: 6,
+    name: "字线不许串门",
+    brief:
+      "2 行 × 2 列电容阵列（ROW/COL 各 1 位）。写 (ROW,COL) 那一格时译码必须精确到只开一根字线——误开的字线会让邻居沿位线被冲掉。写一格、盯三格。",
+    teach:
+      "DRAM 阵列每根字线连一整行电容：译码多开一根线，整行的电荷全毁。" +
+      "字线 = 行译码 AND 列译码 AND WE；位线按列共享。译码器的精度是存储器的命根子。",
+    available: ["input", "output", "clock", "CAPCELL", "demux", "mux", "and", "or", "not", "const"],
+    skeleton: () =>
+      circuit([
+        clkSrc("CLK", 0, 0),
+        ioIn("ROW", 4, 1),
+        ioIn("COL", 8, 1),
+        ioIn("D", 12, 2),
+        ioIn("WE", 16, 1),
+        comp("g00", "CAPCELL", 26, 0, { leakN: 999 }, { name: "G00" }),
+        comp("g01", "CAPCELL", 26, 5, { leakN: 999 }, { name: "G01" }),
+        comp("g10", "CAPCELL", 26, 10, { leakN: 999 }, { name: "G10" }),
+        comp("g11", "CAPCELL", 26, 15, { leakN: 999 }, { name: "G11" }),
+        ioOut("Q00", 48, 0, 2),
+        ioOut("Q01", 48, 5, 2),
+        ioOut("Q10", 48, 10, 2),
+        ioOut("Q11", 48, 15, 2),
+      ]),
+    tests: [
+      {
+        name: "写 G11=满电平，别惊动任何人",
+        phases: [
+          { inputs: { ROW: 1, COL: 1, D: 2, WE: 1 }, steps: 1 },
+          { inputs: { ROW: 0, COL: 0, D: 0, WE: 0 }, steps: 2 },
+        ],
+        outputs: { Q00: 0, Q01: 0, Q10: 0, Q11: 2 },
+      },
+      {
+        name: "连写三格，先写的还在",
+        phases: [
+          { inputs: { ROW: 1, COL: 1, D: 2, WE: 1 }, steps: 1 },
+          { inputs: { ROW: 0, COL: 1, D: 1, WE: 1 }, steps: 1 },
+          { inputs: { ROW: 0, COL: 0, D: 2, WE: 1 }, steps: 1 },
+          { inputs: { ROW: 0, COL: 0, D: 0, WE: 0 }, steps: 2 },
+        ],
+        outputs: { Q00: 2, Q01: 1, Q10: 0, Q11: 2 },
+      },
+    ],
+    hint: "EN(r,c) = 行译码 AND 列译码 AND WE。位线按列共享：BL(列) = WE ? D : 按行选出的本列选中格的 Q。",
+  },
+  {
+    id: "m2-4b-secdec",
+    tier: 6,
+    name: "★ 汉明纠错",
+    brief:
+      "给 4 位数据搭一套纠错编码：故障开关 FLT1/FLT2 接进你码字的任意两个不同位置，接收端要把单翻转自动纠正（CORR 输出纠完的数据）；两位同时翻必须报警 DERR=1。",
+    teach:
+      "内存每 64 位配 8 位校验就是这么做的：校验位按『地址含这一位的数据位』分组配平，读出时重算 syndrome，非零即错位（memory_work 01 §7.2）。" +
+      "纠一位要码距 ≥3；再检出两位，加一位全组奇偶即可——SECDED = Single Error Correct, Double Error Detect。",
+    available: ["input", "output", "clock", "xor", "and", "or", "not", "const", "split", "merge", "mux", "demux", "cmp", "dff"],
+    skeleton: () =>
+      circuit([
+        ioIn("D", 0, 4),
+        ioIn("FLT1", 4, 1),
+        ioIn("FLT2", 8, 1),
+        ioOut("CORR", 60, 0, 4),
+        ioOut("DERR", 60, 6, 1),
+      ]),
+    tests: [
+      { name: "无故障直通", phases: [{ inputs: { D: 11, FLT1: 0, FLT2: 0 }, steps: 1 }], outputs: { CORR: 11, DERR: 0 } },
+      { name: "单错自动纠正", phases: [{ inputs: { D: 13, FLT1: 1, FLT2: 0 }, steps: 1 }], outputs: { CORR: 13, DERR: 0 } },
+      { name: "双位错必须报警", phases: [{ inputs: { D: 11, FLT1: 1, FLT2: 1 }, steps: 1 }], outputs: { DERR: 1 } },
+    ],
+    hint: "编码和校验全是异或。码字 7 位按 1..7 编号，校验位放 2 的幂位置，再加一位全偶校验：syndrome≠0 且全偶被破坏 = 纠它；syndrome≠0 且全偶完好 = 双错，报警。",
+  },
 ];
 
-export const STORAGE_LEVELS: Level[] = [...M2];
+export const STORAGE_LEVELS: Level[] = [...M1, ...M2];
 
 export function levelById(id: string): Level | undefined {
   return LEVELS.find((l) => l.id === id) ?? STORAGE_LEVELS.find((l) => l.id === id);

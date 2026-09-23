@@ -772,6 +772,40 @@ export const SOLUTIONS: Record<string, Fix> = {
   },
 
   /* ---------------- 存储书 ---------------- */
+  "m1-1-norlatch": onRoot((b) => {
+    /* 交叉耦合：Q = NOR(R, Q̄)，Q̄ = NOR(S, Q) */
+    const gq = b.add("nor", 16, 0, {});
+    const gqn = b.add("nor", 16, 6, {});
+    b.link([
+      ["R", "out", gq, "i0"],
+      [gqn, "out", gq, "i1"],
+      [gq, "out", "Q", "in"],
+      ["S", "out", gqn, "i0"],
+      [gq, "out", gqn, "i1"],
+      [gqn, "out", "QN", "in"],
+    ]);
+  }),
+  "m1-2-decode4": onRoot((b) => {
+    /* 写走 2→4 译码 + WE，读走 4 选 1 */
+    const dec = b.add("demux", 12, 2, { inputs: 4 });
+    const rd = b.add("mux", 38, 0, { inputs: 4 });
+    b.link([
+      ["ADDR", "out", dec, "sel"],
+      ["ADDR", "out", rd, "sel"],
+    ]);
+    for (let k = 0; k < 4; k++) {
+      const w = b.add("and", 16, k * 5, {});
+      b.link([
+        ["WE", "out", w, "i0"],
+        [dec, "o" + k, w, "i1"],
+        ["CLK", "out", "C" + k, "clk"],
+        [w, "out", "C" + k, "load"],
+        ["DIN", "out", "C" + k, "d"],
+        ["C" + k, "q", rd, "i" + k],
+      ]);
+    }
+    b.link([[rd, "out", "DOUT", "in"]]);
+  }),
   "m2-1-leakycap": onRoot((b) => {
     /* 刷新 = 别让电容闲着：EN 提高为 EN|CLK，每个沿都把 D 上的数据重写回去 */
     const g = b.add("or", 8, 14, {});
@@ -782,6 +816,204 @@ export const SOLUTIONS: Record<string, Fix> = {
       [g, "out", "cap", "EN"],
       ["D", "out", "cap", "BL"],
       ["cap", "Q", "Q", "in"],
+    ]);
+  }),
+  "m2-2-destructive": onRoot((b) => {
+    /* 读-放大-回写闭环：单元的 Q 喂给感放，感放输出顶住位线 */
+    const sa = b.add("SENSEAMP", 26, 2, {});
+    b.link([
+      ["CLK", "out", "cap", "CLK"],
+      ["EN", "out", "cap", "EN"],
+      ["cap", "Q", sa, "IN"],
+      [sa, "OUT", "cap", "BL"],
+      ["SE", "out", sa, "SE"],
+      ["cap", "Q", "Q", "in"],
+    ]);
+  }),
+  "m2-3-refresh": onRoot((b) => {
+    /* 写命中与刷新行分时驱动字线；位线 = WE ? D : 自己的 Q（自己写回自己） */
+    const nw = b.add("not", 12, 20, {});
+    const rdec = b.add("demux", 14, 24, { inputs: 4 });
+    const wdec = b.add("demux", 14, 34, { inputs: 4 });
+    b.link([
+      ["CLK", "out", "ref", "CLK"],
+      ["ref", "ROW", rdec, "sel"],
+      ["ADDR", "out", wdec, "sel"],
+      ["WE", "out", nw, "i0"],
+    ]);
+    for (let k = 0; k < 4; k++) {
+      const cell = "c" + k;
+      const y = k * 12;
+      const w = b.add("and", 16, y, {});
+      const r = b.add("and", 16, y + 2, {});
+      const en = b.add("or", 18, y + 1, {});
+      const mx = b.add("mux", 19, y + 5, { inputs: 2 });
+      b.link([
+        ["WE", "out", w, "i0"],
+        [wdec, "o" + k, w, "i1"],
+        [nw, "out", r, "i0"],
+        [rdec, "o" + k, r, "i1"],
+        [w, "out", en, "i0"],
+        [r, "out", en, "i1"],
+        [en, "out", cell, "EN"],
+        ["CLK", "out", cell, "CLK"],
+        [cell, "Q", mx, "i0"],
+        ["D", "out", mx, "i1"],
+        ["WE", "out", mx, "sel"],
+        [mx, "out", cell, "BL"],
+        [cell, "Q", "Q" + k, "in"],
+      ]);
+    }
+  }),
+  "m2-4-wordline": onRoot((b) => {
+    /* 字线 = 行译码 AND 列译码 AND WE；位线按列共享，读侧按行选源 */
+    const rdec = b.add("demux", 18, 0, { inputs: 2 });
+    const cdec = b.add("demux", 18, 8, { inputs: 2 });
+    b.link([
+      ["ROW", "out", rdec, "sel"],
+      ["COL", "out", cdec, "sel"],
+    ]);
+    const cellId = [
+      ["g00", "Q00"],
+      ["g01", "Q01"],
+      ["g10", "Q10"],
+      ["g11", "Q11"],
+    ];
+    for (let r = 0; r < 2; r++) {
+      for (let c = 0; c < 2; c++) {
+        const [id, lamp] = cellId[r * 2 + c];
+        const e = b.add("and", 20, r * 12 + c * 4, { inputs: 3 });
+        b.link([
+          [rdec, "o" + r, e, "i0"],
+          [cdec, "o" + c, e, "i1"],
+          ["WE", "out", e, "i2"],
+          [e, "out", id, "EN"],
+          ["CLK", "out", id, "CLK"],
+          [id, "Q", lamp, "in"],
+        ]);
+      }
+    }
+    for (let c = 0; c < 2; c++) {
+      const fb = b.add("mux", 34, c * 10, { inputs: 2 });
+      const bl = b.add("mux", 38, c * 10, { inputs: 2 });
+      b.link([
+        ["ROW", "out", fb, "sel"],
+        ["g0" + c, "Q", fb, "i0"],
+        ["g1" + c, "Q", fb, "i1"],
+        ["WE", "out", bl, "sel"],
+        [fb, "out", bl, "i0"],
+        ["D", "out", bl, "i1"],
+        [bl, "out", "g0" + c, "BL"],
+        [bl, "out", "g1" + c, "BL"],
+      ]);
+    }
+  }),
+  "m2-4b-secdec": onRoot((b) => {
+    /* Hamming(7,4) + 全偶校验（SECDED）。码字位置 1..7 = [p1, p2, d0, p4, d1, d2, d3]，
+       FLT1 打在位 2、FLT2 打在位 5；接收端重算 syndrome 与总奇偶：
+       syndrome≠0 且总偶被破坏 = 单错纠正；syndrome≠0 且总偶完好 = 双错报警 */
+    const sd = b.add("split", 2, 10, { bitWidth: 4 });
+    b.link([["D", "out", sd, "in"]]);
+    const p1 = b.add("xor", 8, 0, { inputs: 3 });
+    const p2 = b.add("xor", 8, 5, { inputs: 3 });
+    const p4 = b.add("xor", 8, 10, { inputs: 3 });
+    const x2 = b.add("xor", 12, 5, {});
+    const x5 = b.add("xor", 12, 15, {});
+    b.link([
+      [sd, "b0", p1, "i0"],
+      [sd, "b1", p1, "i1"],
+      [sd, "b3", p1, "i2"],
+      [sd, "b0", p2, "i0"],
+      [sd, "b2", p2, "i1"],
+      [sd, "b3", p2, "i2"],
+      [sd, "b1", p4, "i0"],
+      [sd, "b2", p4, "i1"],
+      [sd, "b3", p4, "i2"],
+      [p2, "out", x2, "i0"],
+      ["FLT1", "out", x2, "i1"],
+      [sd, "b1", x5, "i0"],
+      ["FLT2", "out", x5, "i1"],
+    ]);
+    /* 接收位 R1..R7 = p1, x2, d0, p4, x5, d2, d3 */
+    const s1 = b.add("xor", 18, 0, { inputs: 4 });
+    const s2 = b.add("xor", 18, 6, { inputs: 4 });
+    const s4 = b.add("xor", 18, 12, { inputs: 4 });
+    b.link([
+      [p1, "out", s1, "i0"],
+      [sd, "b0", s1, "i1"],
+      [x5, "out", s1, "i2"],
+      [sd, "b3", s1, "i3"],
+      [x2, "out", s2, "i0"],
+      [sd, "b0", s2, "i1"],
+      [sd, "b2", s2, "i2"],
+      [sd, "b3", s2, "i3"],
+      [p4, "out", s4, "i0"],
+      [x5, "out", s4, "i1"],
+      [sd, "b2", s4, "i2"],
+      [sd, "b3", s4, "i3"],
+    ]);
+    const sm = b.add("merge", 22, 6, { bitWidth: 3 });
+    const dec = b.add("demux", 25, 4, { inputs: 8 });
+    b.link([
+      [s1, "out", sm, "b0"],
+      [s2, "out", sm, "b1"],
+      [s4, "out", sm, "b2"],
+      [sm, "out", dec, "sel"],
+    ]);
+    /* 数据位都在偶数位置之外：3=d0、5=d1、6=d2、7=d3，按 syndrome 翻转 */
+    const c3 = b.add("xor", 30, 0, {});
+    const c5 = b.add("xor", 30, 4, {});
+    const c6 = b.add("xor", 30, 8, {});
+    const c7 = b.add("xor", 30, 12, {});
+    const corr = b.add("merge", 34, 4, { bitWidth: 4 });
+    b.link([
+      [sd, "b0", c3, "i0"],
+      [dec, "o3", c3, "i1"],
+      [x5, "out", c5, "i0"],
+      [dec, "o5", c5, "i1"],
+      [sd, "b2", c6, "i0"],
+      [dec, "o6", c6, "i1"],
+      [sd, "b3", c7, "i0"],
+      [dec, "o7", c7, "i1"],
+      [c3, "out", corr, "b0"],
+      [c5, "out", corr, "b1"],
+      [c6, "out", corr, "b2"],
+      [c7, "out", corr, "b3"],
+      [corr, "out", "CORR", "in"],
+    ]);
+    /* 双错检测：两位翻转不破坏总偶校验，但 syndrome 必然非零 */
+    const rxp = b.add("xor", 18, 20, { inputs: 7 });
+    const pall = b.add("xor", 18, 30, { inputs: 7 });
+    b.link([
+      [p1, "out", rxp, "i0"],
+      [x2, "out", rxp, "i1"],
+      [sd, "b0", rxp, "i2"],
+      [p4, "out", rxp, "i3"],
+      [x5, "out", rxp, "i4"],
+      [sd, "b2", rxp, "i5"],
+      [sd, "b3", rxp, "i6"],
+      [p1, "out", pall, "i0"],
+      [p2, "out", pall, "i1"],
+      [sd, "b0", pall, "i2"],
+      [p4, "out", pall, "i3"],
+      [sd, "b1", pall, "i4"],
+      [sd, "b2", pall, "i5"],
+      [sd, "b3", pall, "i6"],
+    ]);
+    const pbr = b.add("xor", 24, 26, {});
+    const npb = b.add("not", 26, 26, { inputs: 1 });
+    const anys = b.add("or", 24, 20, { inputs: 3 });
+    const derr = b.add("and", 28, 22, {});
+    b.link([
+      [rxp, "out", pbr, "i0"],
+      [pall, "out", pbr, "i1"],
+      [pbr, "out", npb, "i0"],
+      [s1, "out", anys, "i0"],
+      [s2, "out", anys, "i1"],
+      [s4, "out", anys, "i2"],
+      [npb, "out", derr, "i0"],
+      [anys, "out", derr, "i1"],
+      [derr, "out", "DERR", "in"],
     ]);
   }),
 };
