@@ -1129,6 +1129,59 @@ input[type="range"]:focus-visible {
   color: #cbd2e1;
 }
 
+/* 波形：每行一个信号，格子从右往左是最近的拍。
+ * 颜色全部走变量 —— 写死在行内 style 里的话，下面的对比度门禁量不到，
+ * 而这里曾经就是这么写的：11 px 文字压合成底色，实测 3.95 与 2.75。 */
+.wave-wrap {
+  margin-top: 12px;
+}
+.wave-collapse {
+  margin-left: auto;
+}
+.wave-list {
+  max-height: 220px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.wave-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.wave-name {
+  flex: none;
+  width: 112px;
+  font-size: 11px;
+  font-family: var(--mono);
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wave-cells {
+  display: flex;
+  flex-direction: row-reverse;
+  gap: 1px;
+  flex: 1;
+  overflow-x: auto;
+}
+.wave-cell {
+  flex: none;
+  font-size: 11px;
+  font-family: var(--mono);
+  padding: 0 4px;
+  border-right: 1px solid var(--edge-strong);
+  background: var(--panel-2);
+  color: var(--dim);
+}
+.wave-cell.hi {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 650;
+}
+
 .help table {
   width: 100%;
   border-collapse: collapse;

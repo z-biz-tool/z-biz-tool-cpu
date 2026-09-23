@@ -68,64 +68,74 @@ export function ProbePanel() {
   );
 }
 
-/** FIX-07: 简易波形面板 — 用 CSS 横向延伸的色块表示每拍值的变化 */
+/**
+ * FIX-07: 波形面板 — 每行一个信号，每格一拍，从右往左是最近的拍。
+ *
+ * 早先这里把颜色直接写死在行内 style 里，11 px 字号压在合成底色上实测只有
+ * 3.95 与 2.75（AA 要 4.5），而且行名是 c_x8k2.out 这种内部 id，读屏和肉眼都
+ * 认不出是哪个元件。改法：颜色走 index.css 的变量（于是对比度门禁量得到，
+ * 实测 5.66 / 4.94 / 14.05），行名用元件的命名，内部 id 留在 title 里备查。
+ */
 function WaveformPanel() {
   const sim = useEditor((s) => s.sim);
   const tick = useEditor((s) => s.tick);
   const [open, setOpen] = useState(false);
-  const sigs = useMemo(() => sim.trace.signals(), [sim, tick]);
+  const rows = useMemo(() => {
+    if (!open) return [];
+    return sim.trace
+      .signals()
+      .map((s) => {
+        const name = sim.compById(s.compId)?.inst?.name ?? s.compId;
+        return {
+          key: s.compId + "." + s.pin,
+          label: `${name}.${s.pin}`,
+          cells: sim.trace.historyOf(s, 64).reverse(),
+        };
+      })
+      .sort((a, b) => a.label.localeCompare(b.label, "zh"));
+  }, [sim, tick, open]);
+
   if (!open) {
     return (
-      <div style={{ marginTop: 12 }}>
+      <div className="wave-wrap">
         <Button size="small" onClick={() => setOpen(true)}>
-          显示最近 N 拍波形 ({sigs.length} 信号)
+          展开波形
         </Button>
       </div>
     );
   }
   return (
-    <div style={{ marginTop: 12 }}>
+    <div className="wave-wrap">
       <div className="asm-actions">
-        <Tag color="purple">FIX-07 波形</Tag>
-        <span className="dim">每行一个信号，每格一拍；同色 = 同值，色块长度即持续拍数</span>
-        <Button size="small" style={{ marginLeft: "auto" }} onClick={() => setOpen(false)}>
+        <span className="sub-title">波形</span>
+        <span className="dim">每行一个信号，每格一拍（右边最新）；格子里是那一拍的值</span>
+        <Button size="small" className="wave-collapse" onClick={() => setOpen(false)}>
           收起
         </Button>
       </div>
-      {sigs.length === 0 ? (
-        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没记录到事件，先跑一拍" />
+      {rows.length === 0 ? (
+        <div className="panel-note">还没有波形：给元件起个名字，再按 → 跑一拍。</div>
       ) : (
-        sigs.map((s) => {
-          const ev = sim.trace.historyOf(s, 64);
-          const compact = ev.map((e) => ({ tick: e.tick, value: e.value, w: e.width })).reverse();
-          return (
-            <div key={s.compId + "." + s.pin} style={{ display: "flex", gap: 4, alignItems: "center", margin: "4px 0" }}>
-              <span className="dim" style={{ width: 110, fontSize: 11, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                {s.compId}.{s.pin}
+        <div className="wave-list">
+          {rows.map((r) => (
+            <div key={r.key} className="wave-row">
+              <span className="wave-name" title={r.key}>
+                {r.label}
               </span>
-              <div style={{ display: "flex", flexDirection: "row-reverse", gap: 1, flex: 1, overflowX: "auto" }}>
-                {compact.map((c, i) => {
-                  const bits = c.w > 1 ? hex(c.value, c.w) : String(c.value);
-                  return (
-                    <span
-                      key={i}
-                      title={`tick ${c.tick} = ${bits}`}
-                      style={{
-                        fontSize: 10,
-                        padding: "0 4px",
-                        borderRight: "1px solid #ddd",
-                        background: c.value ? "#1677ff22" : "#88888822",
-                        color: c.value ? "#1677ff" : "#666",
-                      }}
-                    >
-                      {c.w > 4 ? hex(c.value, c.w) : c.value}
-                    </span>
-                  );
-                })}
-              </div>
+              <span className="wave-cells">
+                {r.cells.map((c, i) => (
+                  <span
+                    key={i}
+                    className={"wave-cell" + (c.value ? " hi" : "")}
+                    title={`第 ${c.tick} 拍 ${r.label} = ${c.width > 4 ? hex(c.value, c.width) : c.value}`}
+                  >
+                    {c.width > 4 ? hex(c.value, c.width) : c.value}
+                  </span>
+                ))}
+              </span>
             </div>
-          );
-        })
+          ))}
+        </div>
       )}
     </div>
   );

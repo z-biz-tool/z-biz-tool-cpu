@@ -2320,6 +2320,22 @@ ok:
     check("GATE: 手册把方向键走访与回车选中写在按键表里", /↑ ↓ ← → \/ Home \/ End/.test(helpCode) && /走访元件/.test(helpCode));
   }
 
+  /* GATE: 波形面板的颜色必须留在样式表里。写进行内 style 的颜色上面的对比度
+   * 门禁量不到 —— 这里就以 11 px 字号压过 3.95 与 2.75 两种不合格的搭配，
+   * 一路绿到有人拿放大镜看为止。行名同理：内部 id 不是给用户读的。 */
+  {
+    const { readFileSync } = await import("node:fs");
+    const strip = (rel: string) =>
+      readFileSync(new URL(rel, import.meta.url).pathname, "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+    const watch = strip("../src/editor/panels/WatchPanels.tsx");
+    const css = strip("../src/index.css");
+    check("GATE: 波形格子改用类名，不再写行内颜色", /className=\{"wave-cell"/.test(watch) && !/#1677ff|#888888|#666/.test(watch));
+    check("GATE: 波形的明暗两态都在样式表里且走变量", /\.wave-cell\s*\{[^}]*color: var\(--dim\)/.test(css) && /\.wave-cell\.hi\s*\{[^}]*color: var\(--accent\)/.test(css));
+    check("GATE: 波形行名是元件命名，内部 id 只留在 title 里备查", /sim\.compById\(s\.compId\)\?\.inst\?\.name \?\? s\.compId/.test(watch) && /title=\{r\.key\}/.test(watch));
+    check("GATE: 没有波形时说的是下一步怎么做，不是一句空态", /还没有波形[\s\S]{0,40}给元件起个名字/.test(watch));
+    check("GATE: 信号按名称排序，翻页重排不会打乱行序", /\.sort\(\(a, b\) => a\.label\.localeCompare/.test(watch));
+  }
+
   /* GATE: 播报层的接线 —— 逻辑可以单测，但"挂在页面哪、用什么 live 语义"
    * 只能靠源码门禁守住：换成 aria-live="assertive" 就会打断读屏当前朗读。 */
   {
