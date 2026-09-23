@@ -835,6 +835,19 @@ input[type="range"]:focus-visible {
 .lv.done {
   border-color: #26503f;
 }
+/* 缺先修的关：不锁、不灰，只用描边和角标说"这条路要先补东西" */
+.lv.gap {
+  border-style: dashed;
+  border-color: var(--edge-strong);
+}
+.lv.gap .lv-no {
+  color: var(--warn);
+}
+.lv-gap {
+  flex: none;
+  color: var(--dim);
+  font-size: 11px;
+}
 .lv.done .lv-no {
   color: var(--ok);
 }

@@ -1,7 +1,10 @@
-import { Modal, Progress, Tag, Tooltip } from "antd";
+import { Button, Modal, Progress, Tag, Tooltip } from "antd";
 import { useState } from "react";
 import { LEVELS, TIERS, levelById } from "../../challenges/levels.ts";
-import { BADGES, isUnlocked, passed, scoreOf, tierDone } from "../../challenges/progress.ts";
+import { catchupLevels, missingPrereqs } from "../../challenges/prereq.ts";
+import { BADGES, passed, scoreOf, tierDone } from "../../challenges/progress.ts";
+/* antd 的 Progress 组件占了这个名字，进度类型换个名再引 */
+import type { Progress as ProgressState } from "../../challenges/progress.ts";
 import type { Badge } from "../../challenges/progress.ts";
 import { settleState } from "../../core/sim.ts";
 import { sortDiags } from "../../core/netlist.ts";
@@ -9,7 +12,20 @@ import { designCost, useEditor } from "../store.ts";
 
 /* ------------------------------------------------------------------ *
  * 关卡面板：五层进度 + 任务说明 + 判题结果
+ *
+ * 推进按先修图（doc 03 §8）：世界顺序只是推荐，缺先修不硬锁，而是先把缺口摆出来，
+ * 给「去补实验」和「直接进入」两条路 —— 直接进去照样判题、照样得勋章，
+ * 但前置关的通关记录不会因为跳关补上。
  * ------------------------------------------------------------------ */
+
+/** 跳关确认里要摆的事实 */
+interface GapAsk {
+  id: string;
+  missing: string[];
+  catchup: string[];
+}
+
+const levelName = (id: string) => levelById(id)?.name ?? id;
 
 export default function ChallengePanel() {
   const levelId = useEditor((s) => s.levelId);
@@ -20,8 +36,18 @@ export default function ChallengePanel() {
   const st = useEditor.getState;
   const level = levelById(levelId ?? "");
   const score = scoreOf(progress);
+  const [gapAsk, setGapAsk] = useState<GapAsk | null>(null);
   /** doc 02 §5.2：振荡与预算用尽必须说不同的话 */
   const settle = result ? settleState(result.settleOutcome) : null;
+
+  const openLevel = (id: string, p: ProgressState) => {
+    const missing = missingPrereqs(p, id);
+    if (!missing.length) {
+      st().startLevel(id);
+      return;
+    }
+    setGapAsk({ id, missing, catchup: catchupLevels(p, id) });
+  };
 
   return (
     <div className="panel-body">
@@ -52,19 +78,19 @@ export default function ChallengePanel() {
               </div>
               <div className="tier-items">
                 {list.map((l) => {
-                  const locked = !isUnlocked(progress, l.id);
+                  const missing = missingPrereqs(progress, l.id);
                   const done = passed(progress, l.id);
                   const rec = progress.done[l.id];
                   return (
                     <button
                       key={l.id}
-                      className={"lv" + (l.id === levelId ? " on" : "") + (done ? " done" : "") + (locked ? " locked" : "")}
-                      disabled={locked}
-                      onClick={() => st().startLevel(l.id)}
-                      title={locked ? "先通过前面的关卡" : l.brief}
+                      className={"lv" + (l.id === levelId ? " on" : "") + (done ? " done" : "") + (missing.length ? " gap" : "")}
+                      onClick={() => openLevel(l.id, progress)}
+                      title={missing.length ? `还缺先修：${missing.map(levelName).join("、")}` : l.brief}
                     >
-                      <span className="lv-no">{done ? "✓" : locked ? "🔒" : l.id.split("-")[0].toUpperCase()}</span>
+                      <span className="lv-no">{done ? "✓" : missing.length ? "!" : l.id.split("-")[0].toUpperCase()}</span>
                       <span className="lv-name">{l.name}</span>
+                      {missing.length > 0 && <span className="lv-gap mono">先修 {missing.length}</span>}
                       {rec?.pass && <span className="lv-cost mono">{rec.cost}</span>}
                     </button>
                   );
@@ -151,6 +177,47 @@ export default function ChallengePanel() {
             </div>
           )}
         </>
+      )}
+      {gapAsk && (
+        <Modal
+          open
+          title={`「${levelName(gapAsk.id)}」还缺 ${gapAsk.missing.length} 项先修`}
+          onCancel={() => setGapAsk(null)}
+          footer={[
+            <Button
+              key="catchup"
+              disabled={!gapAsk.catchup.length}
+              onClick={() => {
+                st().startLevel(gapAsk.catchup[0]);
+                setGapAsk(null);
+              }}
+            >
+              {gapAsk.catchup.length ? `先去补「${levelName(gapAsk.catchup[0])}」` : "没有可补的关卡"}
+            </Button>,
+            <Button
+              key="enter"
+              type="primary"
+              onClick={() => {
+                st().startLevel(gapAsk.id);
+                setGapAsk(null);
+              }}
+            >
+              直接进入
+            </Button>,
+            <Button key="back" type="text" onClick={() => setGapAsk(null)}>
+              先不跳
+            </Button>,
+          ]}
+        >
+          <p className="desc">缺的先修：{gapAsk.missing.map(levelName).join("、")}</p>
+          {!!gapAsk.catchup.length && (
+            <p className="teach">
+              最短补充路径：{gapAsk.catchup.slice(0, 6).map(levelName).join(" → ")}
+              {gapAsk.catchup.length > 6 ? ` → 另 ${gapAsk.catchup.length - 6} 关` : ""}
+            </p>
+          )}
+          <p className="hint">直接进入照样能判题、照样拿勋章；但前面那几关的通关记录不会因为跳关补上。</p>
+        </Modal>
       )}
       <AchievementToast />
     </div>

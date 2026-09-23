@@ -3,7 +3,9 @@ import { LEVELS, levelById, parCost } from "./levels.ts";
 import type { LevelResult } from "./verify.ts";
 
 /* ------------------------------------------------------------------ *
- * 进度与成就：存 localStorage，按顺序解锁关卡
+ * 进度与成就：存 localStorage。
+ * 推进条件不在这里 —— 关卡面板按先修图（challenges/prereq.ts）判断缺口，
+ * 这里只记「哪一关拿到了通关证据」。
  * ------------------------------------------------------------------ */
 
 export interface LevelRecord {
@@ -82,13 +84,6 @@ export function saveProgress(p: Progress) {
 
 export function passed(p: Progress, id: string): boolean {
   return !!p.done[id]?.pass;
-}
-
-/** 线性解锁：第一关始终开放，其余要求前一关通过 */
-export function isUnlocked(p: Progress, id: string): boolean {
-  const i = LEVELS.findIndex((l) => l.id === id);
-  if (i <= 0) return i === 0;
-  return passed(p, LEVELS[i - 1].id);
 }
 
 export function nextOpenLevel(p: Progress): string {

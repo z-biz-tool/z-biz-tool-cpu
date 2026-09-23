@@ -2599,5 +2599,80 @@ ok:
   check("GATE: 账本按 label 聚合但保留 boundary／unknown 两笔", /def\.boundary\) boundary\+\+/.test(invSrc) && /unknown\+\+/.test(invSrc));
 }
 
+
+/* ------------------------------------------------------------------ *
+ * PR：先修图驱动推进（doc 03 §8 EDU-02）—— 缺先修不锁人，只把缺口摆出来
+ * ------------------------------------------------------------------ */
+{
+  const pr = await import("../src/challenges/prereq.ts");
+  const pg = await import("../src/challenges/progress.ts");
+  const md = await import("../src/courses/publishMetadata.ts");
+  const { LEVELS: LVS, levelById: byId } = await import("../src/challenges/levels.ts");
+  type Prog = Parameters<typeof pg.passed>[0];
+  const fresh = (): Prog => ({ active: "t1-gates", done: {}, badges: [], speed: 8 });
+  const beat = (p: Prog, ...ids: string[]): Prog => {
+    const done = { ...p.done };
+    for (const id of ids) done[id] = { pass: true, cost: 0, ok: 1, total: 1 };
+    return { ...p, done };
+  };
+
+  check("PR: 31 关全部带先修声明", LVS.every((l) => !!md.META_BY_ID[l.id]), LVS.filter((l) => !md.META_BY_ID[l.id]).map((l) => l.id).join(","));
+  check("PR: 先修图无悬空引用、无环", pr.prereqGraphIssues().length === 0, pr.prereqGraphIssues().join(" | "));
+  check("PR: 第一关能开打（序章概念不当闸门）", pr.missingPrereqs(fresh(), "t1-gates").length === 0);
+  check("PR: 第二关缺第一关的通关证据", pr.missingPrereqs(fresh(), "t1-xor").join() === "t1-gates");
+  check("PR: 补上证据后缺口清零", pr.missingPrereqs(beat(fresh(), "t1-gates"), "t1-xor").length === 0);
+
+  /* 这组是「先修图」和「按数组顺序解锁」的分水岭：
+   * t1-dec24 的直接先修是 t1-mux2，不是排在它前面的 t1-fulladd */
+  const branchOnly = beat(fresh(), "t1-gates", "t1-xor", "t1-mux2");
+  check("PR: 兄弟分支互不牵连（译码器不被全加器卡住）", pr.missingPrereqs(branchOnly, "t1-dec24").length === 0 && !pg.passed(branchOnly, "t1-fulladd"));
+  check("PR: 同层的半加器此时也开了", pr.missingPrereqs(branchOnly, "t1-halfadd").length === 0);
+
+  const chain = pr.catchupLevels(fresh(), "t2-add4");
+  check("PR: 最短补充路径把缺口的缺口排在前面", chain.length === 5 && chain[chain.length - 1] === "t1-fulladd" && chain[0] === "t1-gates", chain.join(">"));
+  check("PR: 补到只剩一个缺口时路径只剩一个", pr.catchupLevels(beat(fresh(), "t1-gates", "t1-xor", "t1-mux2", "t1-halfadd"), "t2-add4").join() === "t1-fulladd");
+  check("PR: 已满足先修的关没有补充路径", pr.catchupLevels(branchOnly, "t1-dec24").length === 0);
+
+  /* 故障注入：真把数据写坏了，图自检必须当场报，不能等构建脚本 */
+  const tampered = md.META_BY_ID["t1-gates"];
+  const before = tampered.prerequisites.slice();
+  try {
+    tampered.prerequisites = ["t1-xor"];
+    const cyc = pr.prereqGraphIssues();
+    check("PR: 先修成环被报出", cyc.some((s: string) => s.includes("成环")), cyc.join(" | "));
+    tampered.prerequisites = ["nowhere-land"];
+    const dang = pr.prereqGraphIssues();
+    check("PR: 悬空先修被报出", dang.some((s: string) => s.includes("nowhere-land")), dang.join(" | "));
+    check("PR: 悬空先修算进缺口（不能假装满足）", pr.missingPrereqs(fresh(), "t1-gates").join() === "nowhere-land");
+  } finally {
+    tampered.prerequisites = before;
+  }
+  check("PR: 故障撤销后图重新干净", pr.prereqGraphIssues().length === 0);
+
+  /* 跳关不补授：只通 Boss 关，前置关不得出现通关记录 */
+  const fakeResult = { pass: true, ok: 1, total: 1, cost: 1, defs: 0, errors: [], notes: [], outcomes: [], settleOutcome: "settled" };
+  const jumped = pg.applyResult(fresh(), byId("t4-machine")!, fakeResult as never);
+  const recorded = Object.keys(jumped.progress.done).filter((k) => jumped.progress.done[k].pass);
+  check("PR: 跳关进入只留下这一关的通关记录", recorded.length === 1 && recorded[0] === "t4-machine", recorded.join(","));
+  check("PR: 跳关不会补授前置关的缺口", pr.missingPrereqs(jumped.progress, "t4-progmem").length > 0);
+
+  const { readFileSync } = await import("node:fs");
+  /* GATE 只认真实代码：注释里复述过的文案会让正则假通过，也会让"已删除"类断言假失败 */
+  const codeOf = (rel: string) => readFileSync(new URL(rel, import.meta.url), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+  const panel = codeOf("../src/editor/panels/ChallengePanel.tsx");
+  const progSrc = codeOf("../src/challenges/progress.ts");
+  check("GATE: 线性解锁函数已删除，全仓再无 isUnlocked", !/isUnlocked/.test(progSrc) && !/isUnlocked/.test(panel));
+  check("GATE: 关卡卡片改按先修缺口说话", /missingPrereqs\(progress, l\.id\)/.test(panel) && /catchupLevels\(p, id\)/.test(panel) && !/🔒/.test(panel) && !/disabled=\{locked\}/.test(panel));
+  check(
+    "GATE: 跳关先展示缺口并并列两条路",
+    /缺的先修：/.test(panel) &&
+      /key="catchup"[\s\S]*?先去补「[\s\S]*?<\/Button>/.test(panel) &&
+      /key="enter"[\s\S]*?直接进入\s*<\/Button>/.test(panel) &&
+      /不会因为跳关补上/.test(panel),
+  );
+  check("GATE: 先修图自己接进运行时，不再是发布期装饰", /META_BY_ID\[levelId\]\?\.prerequisites/.test(codeOf("../src/challenges/prereq.ts")));
+  check("GATE: 删掉「永远返回空 id」的死映射不再骗人", !/idForWorld|metaByLevelMap/.test(codeOf("../src/courses/publishMetadata.ts")));
+}
+
 console.log(`\n${failed === 0 ? "\x1b[32m" : "\x1b[31m"}内核自检：${passed} 通过 / ${failed} 失败\x1b[0m`);
 process.exit(failed === 0 ? 0 : 1);

@@ -471,18 +471,6 @@ export const LEVEL_META: LevelPublishMeta[] = [
   }),
 ];
 
-export const ALL_META: LevelPublishMeta[] = [...PROLOGUE_META, ...LEVEL_META];
-
-export function metaByLevelMap(): Map<string, LevelPublishMeta> {
-  const m = new Map<string, LevelPublishMeta>();
-  for (const x of ALL_META) m.set(idForWorld(x), x);
-  return m;
-}
-
-function idForWorld(_m: LevelPublishMeta): string {
-  return "";
-}
-
 export const META_BY_ID: Record<string, LevelPublishMeta> = (() => {
   const out: Record<string, LevelPublishMeta> = {};
   for (const m of PROLOGUE_META) out[`prologue-${prologueIdOf(m)}`] = m;
