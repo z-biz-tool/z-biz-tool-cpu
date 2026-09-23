@@ -238,7 +238,7 @@ function StorageSection({
 }) {
   if (!STORAGE_LEVELS.length) return null;
   const done = STORAGE_LEVELS.filter((l) => passed(progress, l.id)).length;
-  const worlds = [...new Set(STORAGE_LEVELS.map((l) => l.id.slice(0, 2)))];
+  const worlds = [...new Set(STORAGE_LEVELS.map((l) => l.id.slice(0, 2).toUpperCase()))];
   const worldNames: Record<string, string> = {
     M1: "一 存就是状态",
     M2: "二 电容与 DRAM",
