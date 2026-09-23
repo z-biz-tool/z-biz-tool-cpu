@@ -79,6 +79,13 @@ export interface EditorState {
   clipboard: { comps: CompInstance[]; wires: Wire[] } | null;
   undo: Snapshot[];
   redo: Snapshot[];
+  /**
+   * 最近一次撤销/重做的结论，供播报用（doc 02 §10）。
+   * 光看 undo/redo 的长度翻不出"撤销了什么"——栈里那条快照的 label 记的才是
+   * 被撤掉的那个动作，而 design 的 diff 只会让连线听起来像"刚接了一根线"。
+   * seq 每撤/重做一次自增，播报拿它当变化位。
+   */
+  historyOp: { seq: number; kind: "undo" | "redo"; label: string };
   /** 拖拽事务：开始时打一次快照 */
   transactionOpen: boolean;
   levelId: string | null;
@@ -404,6 +411,7 @@ export const useEditor = create<EditorState>((set, get) => {
     clipboard: null,
     undo: [],
     redo: [],
+    historyOp: { seq: 0, kind: "undo", label: "" },
     transactionOpen: false,
     levelId: bootLevel?.id ?? null,
     mode: bootLevel ? "level" : "sandbox",
@@ -513,7 +521,9 @@ export const useEditor = create<EditorState>((set, get) => {
       const st = get();
       const last = st.undo[st.undo.length - 1];
       if (!last) return;
-      const current: Snapshot = { design: cloneDesign(st.design), label: "重做" };
+      /* 快照的 label 记的是"这一份之前的那个动作"，所以撤销时它正好能回答
+         "撤掉的是什么"。把它带到 redo 栈上，重做才念得出同一个名字。 */
+      const current: Snapshot = { design: cloneDesign(st.design), label: last.label };
       /* 线被整个换回去了：攥着的起点可能指向已经不存在的引脚，改接后撤销更是会把
          刚拆下的那根线又接回原处。和选区一样清掉，让撤销回到"没有半成品"。 */
       set({
@@ -521,6 +531,7 @@ export const useEditor = create<EditorState>((set, get) => {
         redo: [...st.redo, current],
         selection: { comps: [], wires: [] },
         pendingWire: null,
+        historyOp: { seq: st.historyOp.seq + 1, kind: "undo", label: last.label },
       });
       replace(last.design, st.view);
     },
@@ -528,12 +539,13 @@ export const useEditor = create<EditorState>((set, get) => {
       const st = get();
       const last = st.redo[st.redo.length - 1];
       if (!last) return;
-      const current: Snapshot = { design: cloneDesign(st.design), label: "撤销" };
+      const current: Snapshot = { design: cloneDesign(st.design), label: last.label };
       set({
         redo: st.redo.slice(0, -1),
         undo: [...st.undo, current],
         selection: { comps: [], wires: [] },
         pendingWire: null,
+        historyOp: { seq: st.historyOp.seq + 1, kind: "redo", label: last.label },
       });
       replace(last.design, st.view);
     },

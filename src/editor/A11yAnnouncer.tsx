@@ -16,6 +16,7 @@ export function A11yAnnouncer() {
   const result = useEditor((s) => s.result);
   const selection = useEditor((s) => s.selection);
   const pendingWire = useEditor((s) => s.pendingWire);
+  const historyOp = useEditor((s) => s.historyOp);
   const design = useEditor((s) => s.design);
   const comps = useEditor((s) => s.circuit().comps);
   const wires = useEditor((s) => s.circuit().wires);
@@ -41,6 +42,9 @@ export function A11yAnnouncer() {
         links: wires.map((w) => ({ from: `${w.a.comp}.${w.a.pin}`, to: `${w.b.comp}.${w.b.pin}` })),
       },
       labels: nameBook.current,
+      /* 撤销的结论由历史栈自己报（store 每次 undo/redo 自增 seq），
+         不靠 design 的 diff 反推——diff 只会把撤销念成"刚接/刚拆了一根线"。 */
+      history: historyOp,
     };
     // 开机第一眼不算"变化"：否则读屏刚连上就被一句「已暂停」打断
     if (!seen.current) {
@@ -51,7 +55,7 @@ export function A11yAnnouncer() {
     if (!r) return;
     seen.current = r.seen;
     setSay(r.say);
-  }, [tick, running, save, result, selection, pendingWire, comps, design, wires, sim]);
+  }, [tick, running, save, result, selection, pendingWire, historyOp, comps, design, wires, sim]);
 
   return (
     <div className="a11y-only" id="a11y-live" aria-label="状态播报">

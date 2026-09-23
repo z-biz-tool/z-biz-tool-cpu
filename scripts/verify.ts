@@ -1504,6 +1504,74 @@ ok:
       );
     }
 
+    /* 撤销/重做要有自己的播报一档，store 就得答得出两件事：刚刚动的是哪一档
+     * （kind）、撤掉的是哪个动作（label）。label 必须跟着快照走过 redo 栈，
+     * 否则重做只能念一句"撤销"，等于没播报。 */
+    {
+      const { useEditor } = await import("../src/editor/store.ts");
+      const { Simulator } = await import("../src/core/sim.ts");
+      const hb = new CircuitBuilder();
+      const hsrc = hb.add("input", 0, 0, { bitWidth: 1 }, { name: "源" });
+      const hand = hb.add("and", 3, 0, {}, { name: "与门" });
+      hb.link([[hsrc, "out", hand, "i0"]]);
+      const hSeed: Design = JSON.parse(JSON.stringify({ name: "hist", root: hb.build(), defs: [] }));
+      const hPut = () => {
+        const fresh: Design = JSON.parse(JSON.stringify(hSeed));
+        useEditor.setState({
+          design: fresh,
+          view: "root",
+          sim: new Simulator(fresh, fresh.root),
+          simRev: 0,
+          selection: { comps: [], wires: [] },
+          pendingWire: null,
+          undo: [],
+          redo: [],
+          historyOp: { seq: 0, kind: "undo", label: "" },
+        } as any);
+      };
+      const hp = () => useEditor.getState();
+      const hwire = () => hp().circuit().wires[0]!.id;
+      hPut();
+      hp().undoAction();
+      hp().redoAction();
+      check(
+        "历史: 空栈撤不动，就不冒充刚刚撤过（seq 不走）",
+        hp().historyOp.seq === 0,
+        JSON.stringify(hp().historyOp),
+      );
+      hPut();
+      hp().rewireWire(hwire(), "a");
+      check("历史: 改接本身不算撤销", hp().historyOp.seq === 0, JSON.stringify(hp().historyOp));
+      hp().undoAction();
+      check(
+        "历史: 撤销报得出撤掉的是哪个动作",
+        hp().historyOp.kind === "undo" && hp().historyOp.label === "改接导线" && hp().historyOp.seq === 1,
+        JSON.stringify(hp().historyOp),
+      );
+      hp().redoAction();
+      check(
+        "历史: 重做沿用同一个动作名（标签跟着快照走上 redo 栈）",
+        hp().historyOp.kind === "redo" && hp().historyOp.label === "改接导线" && hp().historyOp.seq === 2,
+        JSON.stringify(hp().historyOp),
+      );
+      hPut();
+      hp().pushHistory("放置元件");
+      hp().pushHistory("改接导线");
+      hp().undoAction();
+      const undoA = { ...hp().historyOp };
+      hp().undoAction();
+      const undoB = { ...hp().historyOp };
+      check(
+        "历史: 连撤两步各归一句，撤的是各自那一步",
+        undoA.label === "改接导线" && undoB.label === "放置元件" && undoB.seq === undoA.seq + 1,
+        JSON.stringify([undoA, undoB]),
+      );
+      check("历史: 撤到空栈后还能重做回来", hp().undo.length === 0 && hp().redo.length === 2, `${hp().redo.length} 步可重做`);
+      hp().redoAction();
+      /* redo 栈是后压先出：最后撤掉的那一步（放置元件）才是第一个重做回来的 */
+      check("历史: 重做念的还是那个动作名，不是「撤销」二字", hp().historyOp.label === "放置元件" && hp().historyOp.kind === "redo", JSON.stringify(hp().historyOp));
+    }
+
 
     const fixed = new CircuitBuilder();
     const b1 = fixed.add("input", 0, 0, { bitWidth: 4 }, { name: "总线" });
@@ -1579,6 +1647,7 @@ ok:
       judge: null,
       selection: { comps: [], wires: [] },
       wire: { pending: null, links: [] },
+      history: { seq: 0, kind: "undo", label: "" },
       labels: new Map(),
     };
     const seen0 = factsKey(base);
@@ -1665,7 +1734,7 @@ ok:
     const [rewireBackSay] = step(named, seenRewire);
     check("AN: 改接半途反悔要说清没接上，不许冒充接回去了", /没有新线接上/.test(rewireBackSay), rewireBackSay);
 
-    /* 一次只播一句：判题 > 保存 > 运行 > 连线 > 选区。删一段电路会同时改动连线
+    /* 一次只播一句：判题 > 保存 > 运行 > 撤销 > 连线 > 选区。删一段电路会同时改动连线
      * 与选区，先说断了几根线，选区那句留到下一轮补上。 */
     const seenCut = factsKey({
       ...named,
@@ -1682,6 +1751,35 @@ ok:
     check("AN: 判题压在连线之前", /判题/.test(judgeVsWire) && !/断开/.test(judgeVsWire), judgeVsWire);
     const [runVsWire] = step({ ...named, run: "running", wire: { pending: "c1.out", links: [] } }, seenNamed);
     check("AN: 运行状态压在连线之前，连线留到下一轮", runVsWire === "运行中", runVsWire);
+
+    /* doc 07 §7：撤销/重做不能靠 design 的 diff 反推。撤掉一根线，在状态里就是一次
+     * wires 减少——不单独播一句「已撤销：接一根线」，用户听到的是「已断开一根线」，
+     * 会以为软件替他按了删除。派生的连线与选区那句必须同一轮消费掉。 */
+    const withHist = (seq: number, kind: "undo" | "redo", label: string, over: Partial<F> = {}) => ({
+      ...named,
+      history: { seq, kind, label },
+      ...over,
+    });
+    const seenWired = factsKey({ ...named, selection: { comps: ["c1"], wires: [] }, wire: { pending: null, links: [{ from: "c1.out", to: "c2.i0" }] } });
+    const undone = withHist(1, "undo", "接一根线", { selection: { comps: [], wires: [] }, wire: { pending: null, links: [] } });
+    const [undoSay, seenUndo] = step(undone, seenWired);
+    check("AN: 撤销说的是「撤掉了哪个动作」，不冒充用户删了线", /^已撤销：接一根线$/.test(undoSay), undoSay);
+    check("AN: 撤销派生的连线与选区增减同轮消费，不再补第二句", nextAnnouncement(undone, seenUndo) === null, JSON.stringify(seenUndo));
+    check("AN: 重做沿用同一个动作名", /^已重做：接一根线$/.test(step(withHist(2, "redo", "接一根线"), seenUndo)[0]), step(withHist(2, "redo", "接一根线"), seenUndo)[0]);
+    /* 连撤两步：label 相同也要各播一句，所以键是 seq 而不是文案 */
+    const [againSay] = step(withHist(3, "undo", "接一根线", { selection: { comps: [], wires: [] }, wire: { pending: null, links: [] } }), seenUndo);
+    check("AN: 连着撤销两步各播一句（seq 才是变化位）", againSay === "已撤销：接一根线", againSay);
+    const [namelessSay] = step(withHist(4, "undo", ""), seenUndo);
+    check("AN: 历史标签缺失就只说撤了上一步，不编动作名", namelessSay === "已撤销上一步操作", namelessSay);
+    /* 消费是一次性的，不是静音：撤完之后真接一根线，还得照常说 */
+    const [liveWireSay] = step(withHist(1, "undo", "接一根线", { wire: { pending: null, links: [{ from: "c1.out", to: "c2.i0" }] } }), seenUndo);
+    check("AN: 撤销之后真的接了线，连线那句照样播", /已接好一根线/.test(liveWireSay), liveWireSay);
+    const histVsWire = speak(withHist(5, "undo", "改接导线", { wire: { pending: "c1.out", links: [] } }), factsKey(named));
+    check("AN: 撤销优先于连线增减", histVsWire === "已撤销：改接导线", histVsWire);
+    const [runVsHist, seenRunVsHist] = step({ ...base, run: "running", history: { seq: 9, kind: "undo", label: "拖拽" } }, seen0);
+    const [histAfterRun] = step({ ...base, run: "running", history: { seq: 9, kind: "undo", label: "拖拽" } }, seenRunVsHist);
+    check("AN: 运行状态压在撤销之前（撤销不是最高一档）", runVsHist === "运行中", runVsHist);
+    check("AN: 让路的撤销那句在下一轮补上", /已撤销：拖拽/.test(histAfterRun), histAfterRun);
   }
 
   /* doc 02 §5.2: 运行状态语言 —— HALTED / NON_CONVERGENT / RESOURCE_LIMIT 互不冒充 */
@@ -2711,6 +2809,40 @@ ok:
     check("GATE: 播报用 polite + atomic，不用 assertive", /role="status"/.test(live) && /aria-live="polite"/.test(live) && /aria-atomic="true"/.test(live) && !/assertive/.test(live));
     check("GATE: 开机第一眼不播（先把当前状态当基线）", /if \(!seen\.current\)/.test(live) && /factsKey\(facts\)/.test(live));
     check("GATE: 组件只负责接线，文案规则在 announce.ts", !/判题通过|已选中/.test(stripLive) && /nextAnnouncement\(facts, seen\.current\)/.test(stripLive));
+    /* 历史这一档同样要有进出口：store 自增了 seq 但 Announcer 不喂进 facts，
+       读屏那边就永远停在旧基线，撤销照样被念成连线增减。 */
+    check(
+      "GATE: 撤销事实喂进了播报通道，并且挂在 effect 依赖里",
+      /const historyOp = useEditor\(\(s\) => s\.historyOp\)/.test(stripLive) &&
+        /history: historyOp,/.test(stripLive) &&
+        /\]\s*,\s*\[[^\]]*\bhistoryOp\b[^\]]*\]/.test(stripLive),
+    );
+    check(
+      "GATE: store 里撤/重做各自自增 seq，漏一边就少一句播报",
+      (() => {
+        const storeLive = readFileSync(new URL("../src/editor/store.ts", import.meta.url).pathname, "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+        const body = (from: string, to: string) => {
+          const a = storeLive.indexOf(from);
+          const b = storeLive.indexOf(to);
+          return a >= 0 && b > a ? storeLive.slice(a, b) : "";
+        };
+        const both = (s: string) => /historyOp: \{ seq: st\.historyOp\.seq \+ 1/.test(s);
+        return (
+          both(body("undoAction() {", "redoAction() {")) &&
+          both(body("redoAction() {", "beginTransaction(label) {")) &&
+          /* redo 栈上的标签必须是跟着走过来的动作名，写死"撤销/重做"等于没播报 */
+          (storeLive.match(/label: last\.label/g) ?? []).length === 2 &&
+          !/label: "(撤销|重做)"/.test(storeLive)
+        );
+      })(),
+    );
+    check(
+      "GATE: 撤销/重做按钮说得出作用在哪一步（名称不只给视觉）",
+      (() => {
+        const tb = readFileSync(new URL("../src/editor/Toolbar.tsx", import.meta.url).pathname, "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+        return /`撤销：\$\{undo\[undo\.length - 1\]\.label\}/.test(tb) && /`重做：\$\{redo\[redo\.length - 1\]\.label\}/.test(tb) && (tb.match(/aria-label=\{undoTip\}|aria-label=\{redoTip\}/g) ?? []).length === 2;
+      })(),
+    );
     /* 连线这一路必须有进出的两端： Announcer 不喂 pendingWire，读屏按端口就什么也听不到；
      * announce.ts 不排序，一句"接好了"会被每拍的选区播报盖掉。
      * 检查范围收在 wire:{…} 这一段里 —— 组件里留一个没人用的 const pendingWire 也能
@@ -2724,14 +2856,26 @@ ok:
     check("GATE: 播报通道不每拍重建 a11y 模型", !/buildA11y|portStructure/.test(stripLive));
     /* 位置按各分支实际返回的那句文案找：wireChanged 这类中间变量在分支之前就声明了，
      * 拿它比顺序会漏掉"把连线整段挪到判题前面"这种改法。 */
-    const prio = ["say: judgeLine(f)", "say: saveLine(f)", "say: runLine(f)", "say: wireLine(f", "say: selLine(f)"].map(
-      (k) => announceCode.indexOf(k),
-    );
+    const prio = [
+      "say: judgeLine(f)",
+      "say: saveLine(f)",
+      "say: runLine(f)",
+      "say: historyLine(f)",
+      "say: wireLine(f",
+      "say: selLine(f)",
+    ].map((k) => announceCode.indexOf(k));
     check(
-      "GATE: 播报优先级排成 判题 > 保存 > 运行 > 连线 > 选区",
+      "GATE: 播报优先级排成 判题 > 保存 > 运行 > 撤销 > 连线 > 选区",
       prio.every((i) => i >= 0) && prio.every((i, n) => n === 0 || i > prio[n - 1]),
       prio.join(" < "),
     );
+    /* 撤销那一档必须把派生的连线/选区基线一起推平：只 return 文案不动基线的话，
+       同一轮的变化会在下一轮被念成「已断开一根线」，用户以为软件替他删了。 */
+    check(
+      "GATE: 撤销这一句把连线与选区的增减一起消费掉",
+      /say: historyLine\(f\),[\s\S]{0,140}wire: next\.wire, sel: next\.sel/.test(announceCode),
+    );
+    check("GATE: 撤销文案取自历史标签，不自己编动作名", /verb\}：\$\{f\.history\.label\}/.test(announceCode) && /f\.history\.kind === "undo"/.test(announceCode));
     check("GATE: 连线播报走画布命名，不念内部 id", /=> endName\(ref, f\.labels\)/.test(announceCode));
     check("GATE: 播报里的元件叫法与属性面板同一套规则", /compLabel\(design, c\)/.test(stripLive) && /labels: nameBook\.current/.test(stripLive));
     check("GATE: 名字簿只增不减，断线那句才报得出刚被删掉的元件", /nameBook\.current\.set\(c\.id, compLabel\(design, c\)\)/.test(stripLive) && !/labels: new Map\(/.test(stripLive));

@@ -29,6 +29,10 @@ export default function Toolbar() {
 
   const circuit = view === "root" ? design.root : design.defs.find((d) => d.id === view)?.circuit ?? design.root;
   const cost = designCost(design);
+  /* 快照的 label 记的就是那一步做了什么（pushHistory 传进来的），撤到空栈时
+     按钮得说清"没得撤"而不是只变灰。 */
+  const undoTip = undo.length ? `撤销：${undo[undo.length - 1].label} (⌘Z)` : "没有可撤销的操作 (⌘Z)";
+  const redoTip = redo.length ? `重做：${redo[redo.length - 1].label} (⌘⇧Z)` : "没有可重做的操作 (⌘⇧Z)";
 
   return (
     <header className="toolbar">
@@ -69,13 +73,15 @@ export default function Toolbar() {
             { label: "连线", value: "wire" },
           ]}
         />
-        <Tooltip title="撤销 (⌘Z)">
-          <button className="btn" disabled={!undo.length} onClick={() => st().undoAction()}>
+        {/* 按钮里只有一个箭头符号，鼠标停在上面、读屏走到上面都得说出撤的是哪一步；
+            空栈时也得解释为什么按不动，否则只像个坏掉的按钮。 */}
+        <Tooltip title={undoTip}>
+          <button className="btn" aria-label={undoTip} disabled={!undo.length} onClick={() => st().undoAction()}>
             ↶
           </button>
         </Tooltip>
-        <Tooltip title="重做 (⌘⇧Z)">
-          <button className="btn" disabled={!redo.length} onClick={() => st().redoAction()}>
+        <Tooltip title={redoTip}>
+          <button className="btn" aria-label={redoTip} disabled={!redo.length} onClick={() => st().redoAction()}>
             ↷
           </button>
         </Tooltip>

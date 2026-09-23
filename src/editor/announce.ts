@@ -5,8 +5,8 @@ import { endName } from "./a11y.ts";
 /* ------------------------------------------------------------------ *
  * doc 02 §10：保存 / 运行 / 判题 / 连线都是"动态信息"，读屏要能听到，但不能
  * 追着波形逐拍念。所以这里只认「状态枚举变了」这一件事：一次只播一句最重要的
- * 话（判题 > 保存 > 运行 > 连线 > 选区），并且把 pending/saving 这种每敲一下就
- * 翻新的中间态静音掉。
+ * 话（判题 > 保存 > 运行 > 撤销 > 连线 > 选区），并且把 pending/saving 这种每敲
+ * 一下就翻新的中间态静音掉。
  * ------------------------------------------------------------------ */
 
 /** 连线这一块要念的是"意图 + 结果"：有没有线头挂在画布上、这轮相比上轮多/少了哪根 */
@@ -23,6 +23,8 @@ export interface AnnounceFacts {
   judge: { pass: boolean; ok: number; total: number; levelId: string } | null;
   selection: { comps: string[]; wires: string[] };
   wire: WireFacts;
+  /** 最近一次撤销/重做：seq 变一次就播一句 */
+  history: { seq: number; kind: "undo" | "redo"; label: string };
   labels: Map<string, string>;
 }
 
@@ -32,6 +34,7 @@ export type AnnounceSeen = {
   judge: string;
   sel: string;
   wire: { pending: string | null; links: string[] };
+  history: number;
 };
 
 /** 中间态念出来会把读屏淹掉：连续编辑时 pending→saving→saved 每半秒翻一次 */
@@ -47,6 +50,7 @@ export function factsKey(f: AnnounceFacts): AnnounceSeen {
     judge: f.judge ? `${f.judge.levelId}:${f.judge.ok}/${f.judge.total}` : "",
     sel: [...f.selection.comps, ...f.selection.wires].join(","),
     wire: { pending: f.wire.pending, links: f.wire.links.map(linkRef) },
+    history: f.history.seq,
   };
 }
 
@@ -81,6 +85,15 @@ function selLine(f: AnnounceFacts) {
 }
 
 const linkRef = (l: { from: string; to: string }) => `${l.from}>${l.to}`;
+
+/**
+ * 撤销/重做这一路只念"哪个动作被撤掉了"，标签直接来自历史栈（pushHistory 传的
+ * 就是动作名）。没有标签是老快照或历史被清空，那就只说撤了上一步，不编动作名。
+ */
+const historyLine = (f: AnnounceFacts) => {
+  const verb = f.history.kind === "undo" ? "已撤销" : "已重做";
+  return f.history.label ? `${verb}：${f.history.label}` : `${verb}上一步操作`;
+};
 
 const pendingLine = (f: AnnounceFacts) =>
   `连线起点已选 ${endName(f.wire.pending!, f.labels)}：再点一个端口完成连线，按 Esc 取消`;
@@ -128,6 +141,15 @@ export function nextAnnouncement(
    * 噪音，若按"键位变化"判断就会把刚被静音的那句又念出来。 */
   if (next.save && next.save !== seen.save) return { say: saveLine(f), seen: Object.assign(out, { save: next.save }) };
   if (next.run !== seen.run) return { say: runLine(f), seen: Object.assign(out, { run: next.run }) };
+  /* 撤销/重做排在连线之前，并且要把由它派生的连线与选区增减一起消费掉：
+     撤掉"接一根线"在状态里就是一次 wires 减少，不消费的话下一轮听到的是
+     「已断开一根线：X → Y」，用户会以为软件替他按了删除。 */
+  if (next.history !== seen.history) {
+    return {
+      say: historyLine(f),
+      seen: Object.assign(out, { history: next.history, wire: next.wire, sel: next.sel }),
+    };
+  }
   /* 连线排在选区之前：删掉一段电路时"断了几根线"比"选中了什么"更是结论。 */
   const wireChanged =
     next.wire.pending !== seen.wire.pending || next.wire.links.join("|") !== seen.wire.links.join("|");
