@@ -4,6 +4,8 @@ import { CATEGORY_LABEL, paletteDefs } from "../core/registry.ts";
 import type { CompCategory, CompDef, CustomDef } from "../core/types.ts";
 import { MAX_POINTS } from "../core/recovery.ts";
 import { downloadText } from "../core/serialize.ts";
+import { unlockedTypesFromDone, unlockSource } from "../challenges/unlocks.ts";
+import { levelById } from "../challenges/levels.ts";
 import { defCost, useEditor } from "./store.ts";
 
 /* ------------------------------------------------------------------ *
@@ -60,21 +62,34 @@ export default function Palette() {
   const recoverySaved = useEditor((s) => s.recoverySaved);
   const forgetRecovery = useEditor((s) => s.forgetRecovery);
   const clearRecovery = useEditor((s) => s.clearRecovery);
+  /** 已解锁元件集合：已通过某关 → 该关解锁的 type 就出现在 palette。
+   * 只订阅 progress.done 防止 Set 在 zustand 比较时被判为不等 */
+  const doneRecord = useEditor((s) => s.progress.done);
+  const unlocks = useMemo(() => unlockedTypesFromDone(doneRecord), [doneRecord]);
 
   const groups = useMemo(() => {
     const kw = q.trim().toLowerCase();
     const hit = (d: CompDef) =>
       !kw || d.label.toLowerCase().includes(kw) || d.type.toLowerCase().includes(kw) || (d.symbol ?? "").toLowerCase().includes(kw);
+    const allMap = new Map<CompCategory, CompDef[]>();
     const map = new Map<CompCategory, CompDef[]>();
+    const push = (m: Map<CompCategory, CompDef[]>, cat: CompCategory, def: CompDef) => {
+      const arr = m.get(cat);
+      if (arr) arr.push(def);
+      else m.set(cat, [def]);
+    };
     for (const def of paletteDefs(true)) {
       if (def.boundary && def.category !== "io") continue;
       if (!hit(def)) continue;
-      const list = map.get(def.category) ?? [];
-      list.push(def);
-      map.set(def.category, list);
+      push(allMap, def.category, def);
+      if (unlocks.has(def.type) || kw) push(map, def.category, def);
     }
-    return ORDER.filter((c) => map.has(c)).map((c) => ({ category: c, defs: map.get(c)! }));
-  }, [q]);
+    return ORDER.filter((c) => allMap.has(c)).map((c) => ({
+      category: c,
+      defs: map.get(c) ?? [],
+      locked: (allMap.get(c) ?? []).filter((d) => !unlocks.has(d.type)),
+    }));
+  }, [q, unlocks]);
 
   const defs = design.defs;
 
@@ -112,7 +127,7 @@ export default function Palette() {
     <div className="palette">
       <input className="search" placeholder="搜索元件…" value={q} onChange={(e) => setQ(e.target.value)} />
       <div className="palette-scroll">
-        {groups.map(({ category, defs: list }) => {
+        {groups.map(({ category, defs: list, locked }) => {
           const key = category;
           const shown = open[key] !== false;
           return (
@@ -123,7 +138,10 @@ export default function Palette() {
               >
                 <span className="caret">{shown ? "▾" : "▸"}</span>
                 {CATEGORY_LABEL[category] ?? category}
-                <em>{list.length}</em>
+                <em>
+                  {list.length}
+                  {locked.length ? `+${locked.length}` : ""}
+                </em>
               </button>
               {shown && (
                 <div className="pal-items">
@@ -139,6 +157,27 @@ export default function Palette() {
                       </button>
                     </Tooltip>
                   ))}
+                  {locked.map((def) => {
+                    const src = unlockSource(def.type);
+                    const srcName = src ? levelById(src)?.name ?? src : "—";
+                    return (
+                      <Tooltip
+                        key={`l-${def.type}`}
+                        placement="right"
+                        title={`通过「${srcName}」解锁 · ${def.label}`}
+                      >
+                        <button
+                          className="pal-item locked"
+                          disabled
+                          aria-label={`未解锁 ${def.label}，通过 ${srcName} 解锁`}
+                        >
+                          <span className="pal-glyph">{def.symbol ?? def.label.slice(0, 2)}</span>
+                          <span className="pal-label">{def.label}</span>
+                          <span className="pal-cost">🔒</span>
+                        </button>
+                      </Tooltip>
+                    );
+                  })}
                 </div>
               )}
             </section>
