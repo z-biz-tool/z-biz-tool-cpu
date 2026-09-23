@@ -770,4 +770,18 @@ export const SOLUTIONS: Record<string, Fix> = {
   "t4-machine": (design) => {
     wireReferenceCpu(design);
   },
+
+  /* ---------------- 存储书 ---------------- */
+  "m2-1-leakycap": onRoot((b) => {
+    /* 刷新 = 别让电容闲着：EN 提高为 EN|CLK，每个沿都把 D 上的数据重写回去 */
+    const g = b.add("or", 8, 14, {});
+    b.link([
+      ["CLK", "out", "cap", "CLK"],
+      ["EN", "out", g, "i0"],
+      ["CLK", "out", g, "i1"],
+      [g, "out", "cap", "EN"],
+      ["D", "out", "cap", "BL"],
+      ["cap", "Q", "Q", "in"],
+    ]);
+  }),
 };

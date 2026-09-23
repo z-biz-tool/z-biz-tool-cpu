@@ -1,6 +1,6 @@
 import { Button, Modal, Progress, Tag, Tooltip } from "antd";
 import { useState } from "react";
-import { LEVELS, TIERS, levelById, parCost } from "../../challenges/levels.ts";
+import { LEVELS, STORAGE_LEVELS, TIERS, levelById, parCost } from "../../challenges/levels.ts";
 import { catchupLevels, missingPrereqs } from "../../challenges/prereq.ts";
 import { BADGES, passed, scoreOf, tierDone } from "../../challenges/progress.ts";
 /* antd 的 Progress 组件占了这个名字，进度类型换个名再引 */
@@ -100,6 +100,8 @@ export default function ChallengePanel() {
           );
         })}
       </div>
+
+      <StorageSection progress={progress} levelId={levelId} onOpen={openLevel} />
 
       <button className="btn wide" onClick={() => st().openSandbox()}>
         进入自由搭建沙盒
@@ -221,6 +223,53 @@ export default function ChallengePanel() {
       )}
       <AchievementToast />
     </div>
+  );
+}
+
+/** 存储书《囚禁电荷》：独立于 CPU 书 31 关的第二本书，先出预览节 */
+function StorageSection({
+  progress,
+  levelId,
+  onOpen,
+}: {
+  progress: ProgressState;
+  levelId: string | null;
+  onOpen: (id: string, p: ProgressState) => void;
+}) {
+  if (!STORAGE_LEVELS.length) return null;
+  const done = STORAGE_LEVELS.filter((l) => passed(progress, l.id)).length;
+  return (
+    <section className="tier">
+      <div className="tier-head">
+        <span>存储书 · 囚禁电荷</span>
+        <Tooltip title="第二本书：把 DRAM / Flash / 磁盘的物理翻译成拍数与预算。正在连载。">
+          <Progress
+            percent={Math.round((done / STORAGE_LEVELS.length) * 100)}
+            size="small"
+            format={() => `${done}/${STORAGE_LEVELS.length}`}
+            status={done === STORAGE_LEVELS.length ? "success" : "active"}
+          />
+        </Tooltip>
+      </div>
+      <div className="tier-items">
+        {STORAGE_LEVELS.map((l) => {
+          const ok = passed(progress, l.id);
+          const rec = progress.done[l.id];
+          return (
+            <button
+              key={l.id}
+              className={"lv" + (l.id === levelId ? " on" : "") + (ok ? " done" : "")}
+              onClick={() => onOpen(l.id, progress)}
+              title={l.brief}
+            >
+              <span className="lv-no">{ok ? "✓" : l.id.split("-")[0].toUpperCase()}</span>
+              <span className="lv-name">{l.name}</span>
+              {rec?.pass && <span className="lv-cost mono">{rec.cost}</span>}
+            </button>
+          );
+        })}
+      </div>
+    </section>
   );
 }
 

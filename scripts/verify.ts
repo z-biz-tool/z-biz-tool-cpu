@@ -7,7 +7,7 @@ import { baseDef } from "../src/core/registry.ts";
 import { sortDiags } from "../src/core/netlist.ts";
 import { RUN_STATE_TEXT, Simulator, settleState, worstSettle } from "../src/core/sim.ts";
 import { totalCost } from "../src/core/custom.ts";
-import { LEVELS, levelDesign, solutionDesign } from "../src/challenges/levels.ts";
+import { LEVELS, STORAGE_LEVELS, levelDesign, solutionDesign } from "../src/challenges/levels.ts";
 import { runLevelTests } from "../src/challenges/verify.ts";
 import { referenceCpu } from "../src/cpu/reference.ts";
 import { runProgram } from "../src/cpu/run.ts";
@@ -3060,6 +3060,21 @@ ok:
     const idx = out(sim, to) * 4 + out(sim, ro);
     check("PLATTER 磁头两拍寻到道 2", trk === 2, `trk=${trk}`);
     check("PLATTER RD 给出磁头下方扇区", q === idx + 1, `q=${q} idx=${idx}`);
+  }
+
+  /* 存储书首个可玩关卡：M2-1 会漏的电容（发现式学习） */
+  {
+    const m21 = STORAGE_LEVELS.find((l) => l.id === "m2-1-leakycap");
+    check("BK: M2-1 已上架存储书", !!m21);
+    check("BK: CPU 书仍是 31 关（存储书不进 LEVELS）", LEVELS.length === 31, `len=${LEVELS.length}`);
+    if (m21) {
+      const naive = runLevelTests(m21, levelDesign(m21));
+      const leakCase = naive.outcomes.find((o) => o.name.includes("60"));
+      check("BK: M2-1 骨架过短等用例、败长等用例", !naive.pass && !!leakCase && !leakCase.pass, JSON.stringify(naive.outcomes.map((o) => [o.name, o.pass])));
+      const sol = solutionDesign(m21);
+      const judged = sol ? runLevelTests(m21, sol) : undefined;
+      check("BK: M2-1 参考解答全过", !!judged && judged.pass, JSON.stringify(judged?.outcomes.map((o) => [o.name, o.pass])));
+    }
   }
 
 console.log(`\n${failed === 0 ? "\x1b[32m" : "\x1b[31m"}内核自检：${passed} 通过 / ${failed} 失败\x1b[0m`);

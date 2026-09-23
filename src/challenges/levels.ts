@@ -1183,8 +1183,59 @@ export const LEVELS: Level[] = [...T1, ...T2, ...T3, ...T4, ...T5];
 
 export const LEVEL_IDS = LEVELS.map((l) => l.id);
 
+/* ================================================================== *
+ * 存储书《囚禁电荷》（book-memory）
+ *
+ * 与 CPU 书 31 关分账：不进 LEVELS（发布门禁按五世界数量校验），
+ * 由关卡面板单独成节、levelById 单独可寻址。tier 6。
+ * 母本：z-how-linux-runs/memory_work/，序列草案：_doc/全量设计/08。
+ * ================================================================== */
+
+const M2: Level[] = [
+  {
+    id: "m2-1-leakycap",
+    tier: 6,
+    name: "会漏的电容",
+    brief:
+      "把 D 上的两位数据写进电容位元 CAP（EN 是字线，D 接位线 BL），然后撒手不管。用例 1 只等一小会儿；用例 2 要等很久。",
+    teach:
+      "DRAM 的一位就是一个电容：电平 0/1/2 表示 GND / VDD÷2 / VDD。EN=1 的时钟沿把 BL 上的电平采进电容，此后每 16 拍漏掉一级。" +
+      "观测 Q 不会伤害它；但开字线的沿上如果位线没人顶着，电荷在读到的瞬间就被毁了——那是下一关的事。",
+    available: ["input", "output", "clock", "CAPCELL", "or", "and", "not", "const"],
+    skeleton: () =>
+      circuit([
+        clkSrc("CLK", 0, 0),
+        ioIn("EN", 4, 1),
+        ioIn("D", 8, 2),
+        comp("cap", "CAPCELL", 14, 2, { leakN: 16 }, { name: "CAP" }),
+        ioOut("Q", 40, 2, 2),
+      ]),
+    tests: [
+      {
+        name: "写满后等 12 拍，还在",
+        phases: [
+          { inputs: { EN: 1, D: 2 }, steps: 1 },
+          { inputs: { EN: 0 }, steps: 12 },
+        ],
+        outputs: { Q: 2 },
+      },
+      {
+        name: "写满后等 60 拍——电容还记得吗？",
+        phases: [
+          { inputs: { EN: 1, D: 2 }, steps: 1 },
+          { inputs: { EN: 0 }, steps: 60 },
+        ],
+        outputs: { Q: 2 },
+      },
+    ],
+    hint: "电容每 16 拍漏一级电，等 60 拍就是漏光。唯一的办法：别让它闲着——想办法不断地把数据写回去。",
+  },
+];
+
+export const STORAGE_LEVELS: Level[] = [...M2];
+
 export function levelById(id: string): Level | undefined {
-  return LEVELS.find((l) => l.id === id);
+  return LEVELS.find((l) => l.id === id) ?? STORAGE_LEVELS.find((l) => l.id === id);
 }
 
 export function levelsByTier(tier: number): Level[] {
