@@ -1,6 +1,6 @@
 import { Button, Modal, Progress, Tag, Tooltip } from "antd";
 import { useState } from "react";
-import { LEVELS, TIERS, levelById } from "../../challenges/levels.ts";
+import { LEVELS, TIERS, levelById, parCost } from "../../challenges/levels.ts";
 import { catchupLevels, missingPrereqs } from "../../challenges/prereq.ts";
 import { BADGES, passed, scoreOf, tierDone } from "../../challenges/progress.ts";
 /* antd 的 Progress 组件占了这个名字，进度类型换个名再引 */
@@ -131,7 +131,7 @@ export default function ChallengePanel() {
               </Tooltip>
             )}
             <Tooltip title={`当前花费 ${designCost(design)}`}>
-              <span className="tag">基准 {level.par ?? "—"}</span>
+              <span className="tag">基准 {parCost(level) ?? "—"}</span>
             </Tooltip>
           </div>
           {result && (

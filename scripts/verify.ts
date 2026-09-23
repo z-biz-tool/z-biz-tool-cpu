@@ -2772,5 +2772,26 @@ ok:
     check("GATE: 冲突副本不认领关卡", /serialize\(\{ \.\.\.design, name \}\)/.test(draftSrc) && !/serialize\(\{ \.\.\.design, name \}, levelId\)/.test(draftSrc));
   }
 
+  /* ---------------------------------------------------------------- *
+   * PC：基准成本（面板上那个「基准」以前永远是「—」）
+   * ---------------------------------------------------------------- */
+  {
+    const lv = await import("../src/challenges/levels.ts");
+    const noPar = lv.LEVELS.filter((l) => typeof lv.parCost(l) !== "number").map((l) => l.id);
+    check("PC: 每一关都算得出基准", noPar.length === 0, noPar.slice(0, 6).join(","));
+    const zero = lv.LEVELS.filter((l) => (lv.parCost(l) ?? 0) <= 0).map((l) => l.id);
+    check("PC: 基准是正数（参考解答总要花点元件）", zero.length === 0, zero.slice(0, 6).join(","));
+    const drift = lv.LEVELS.filter((l) => {
+      const sol = lv.solutionDesign(l);
+      return !sol || lv.parCost(l) !== lv.parOf(sol);
+    }).map((l) => l.id);
+    check("PC: 基准跟着参考解答走，不是写死的数", drift.length === 0, drift.slice(0, 6).join(","));
+    check("PC: 没有任何关卡自己写死 par", lv.LEVELS.every((l) => l.par === undefined));
+
+    const { readFileSync } = await import("node:fs");
+    const panel = readFileSync(new URL("../src/editor/panels/ChallengePanel.tsx", import.meta.url).pathname, "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+    check("GATE: 面板基准改走 parCost", /parCost\(level\)/.test(panel) && !/level\.par\s*\?\?/.test(panel));
+  }
+
 console.log(`\n${failed === 0 ? "\x1b[32m" : "\x1b[31m"}内核自检：${passed} 通过 / ${failed} 失败\x1b[0m`);
 process.exit(failed === 0 ? 0 : 1);
