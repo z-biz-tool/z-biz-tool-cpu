@@ -1,8 +1,9 @@
-import { Select, Switch } from "antd";
+import { Select, Switch, Tooltip } from "antd";
 import { useMemo, useState } from "react";
 import { customDefOf, defOf } from "../core/custom.ts";
 import { sortDiags } from "../core/netlist.ts";
 import { bin, hex, type CompInstance, type ParamSpec } from "../core/types.ts";
+import { componentInventory, emptyInventoryHint } from "./inventory.ts";
 import { defCost, designCost, useEditor } from "./store.ts";
 
 /* ------------------------------------------------------------------ *
@@ -152,19 +153,8 @@ function EmptyInfo() {
   const view = useEditor((s) => s.view);
   const errors = useEditor((s) => s.sim.errors);
   const diags = useMemo(() => sortDiags(errors), [errors]);
-  const stats = useMemo(() => {
-    const byCat = new Map<string, number>();
-    const walk = (comps: CompInstance[]) => {
-      for (const c of comps) {
-        const def = defOf(design, c.type, c.params);
-        if (!def || def.boundary) continue;
-        byCat.set(def.label, (byCat.get(def.label) ?? 0) + 1);
-      }
-    };
-    walk(design.root.comps);
-    for (const d of design.defs) walk(d.circuit.comps);
-    return [...byCat.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12);
-  }, [design]);
+  const inv = useMemo(() => componentInventory(design), [design]);
+  const hint = emptyInventoryHint(inv);
 
   return (
     <div className="panel-body">
@@ -175,12 +165,18 @@ function EmptyInfo() {
       <p className="hint">在画布上点选元件后这里可以改参数、看引脚值。按 G 可把选中元件封装成子电路。</p>
       <h4>元件清单</h4>
       <div className="chips">
-        {stats.length === 0 && <span className="hint">画布还是空的。</span>}
-        {stats.map(([k, n]) => (
+        {hint && <span className="hint">{hint}</span>}
+        {inv.chips.map(([k, n]) => (
           <span className="chip" key={k}>
             {k} <b>{n}</b>
           </span>
         ))}
+        {!!inv.unknown && (
+          <Tooltip title="这些元件在当前设计里找不到定义，多半来自旧存档或被子电路删过；仿真时它们不参与计算">
+            <span className="chip">认不出定义 <b>{inv.unknown}</b></span>
+          </Tooltip>
+        )}
+        {!!inv.hidden && <span className="hint">另有 {inv.hidden} 类未列出</span>}
       </div>
       {!!diags.length && (
         <>

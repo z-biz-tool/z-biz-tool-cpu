@@ -2543,5 +2543,61 @@ ok:
   check(`AT-01..12 合计 ${atPass}/${atResults.length}`, atFail === 0);
 }
 
+
+/* ------------------------------------------------------------------ *
+ * INV：元件清单的账 —— 画布上有 4 个元件时不能说「画布还是空的」
+ * ------------------------------------------------------------------ */
+{
+  const inv = await import("../src/editor/inventory.ts");
+  const { baseDef } = await import("../src/core/registry.ts");
+  const cmp = (id: string, type: string, x = 0): CompInstance => ({ id, type, x, y: 1, rot: 0, params: {} });
+  const cir = (comps: CompInstance[]): Circuit => ({ comps, wires: [] });
+  const des = (comps: CompInstance[], defs: Design["defs"] = []): Design => ({ name: "t", root: cir(comps), defs });
+  /* 取不到定义时留空串，让下面几条断言自己炸，别拿 undefined 蒙过去 */
+  const ioLabel = baseDef("input")?.label ?? "";
+  const andLabel = baseDef("and")?.label ?? "";
+  /* chips 在 mixed 之后才有值，用函数取而不是取一次存下来 */
+  const firstChip = () => mixed.chips[0]?.[0] ?? "";
+
+  const empty = inv.componentInventory(des([]));
+  check("INV: 空画布才是真的空", empty.chips.length === 0 && empty.boundary === 0 && empty.unknown === 0);
+  check("INV: 空画布说「画布还是空的」", inv.emptyInventoryHint(empty) === "画布还是空的。", inv.emptyInventoryHint(empty));
+
+  /* 关卡给的半加器骨架：2 个输入脚 + 2 个输出脚，一个逻辑元件都没有 */
+  const skeleton = inv.componentInventory(des([cmp("x", "input"), cmp("b", "input"), cmp("s", "output"), cmp("c", "output")]));
+  check("INV: 输入输出脚算 boundary 而不是被跳过", skeleton.boundary === 4 && skeleton.chips.length === 0, JSON.stringify(skeleton));
+  const skHint = inv.emptyInventoryHint(skeleton);
+  check("INV: 只有输入输出脚时如实报数量，不改口说画布空", skHint.includes("4 个输入／输出脚") && skHint !== "画布还是空的。", skHint);
+
+  const mixed = inv.componentInventory(des([cmp("x", "input"), cmp("a", "and"), cmp("o", "output")]));
+  check("INV: 逻辑元件进清单，输入输出脚另算", mixed.chips.length === 1 && firstChip() === andLabel && mixed.boundary === 2, JSON.stringify(mixed.chips));
+  check("INV: 有逻辑元件时空态闭嘴", inv.emptyInventoryHint(mixed) === "");
+  check("INV: 清单标签用 registry 的显示名", firstChip() !== "and" && !!ioLabel);
+
+  /* 导入的旧档会引用被删掉的子电路：这类元件过去既不进清单也不解释 */
+  const miss = inv.componentInventory(des([cmp("g", "ghost"), cmp("c2", "custom:nope")]));
+  check("INV: 认不出定义的元件单独记账", miss.unknown === 2 && miss.chips.length === 0, JSON.stringify(miss));
+  check("INV: 有认不出的元件时由芯片开口，不叠一句空态", inv.emptyInventoryHint(miss) === "");
+
+  /* 子电路里的元件也是这个设计的一部分，不能只数主电路 */
+  const withDef = inv.componentInventory(
+    des([cmp("u", "custom:d1")], [{ id: "d1", name: "壳", circuit: cir([cmp("i", "input"), cmp("a", "and")]) }])
+  );
+  check("INV: 子电路内的元件一起算", withDef.boundary === 1 && withDef.chips.some(([k, n]) => k === andLabel && n === 1), JSON.stringify(withDef.chips));
+
+  /* 12 类上限过去是静默截断：CPU 那种大盘子得说「还有几类没列」 */
+  const many = inv.componentInventory(
+    des([...Array(13)].map((_, i) => cmp("g" + i, ["or", "and", "xor", "not", "nand", "nor", "sub", "add", "mux", "dff", "reg", "ram", "split"][i])))
+  );
+  check("INV: 超过 12 类时按数量排序并报出没列出的类数", many.chips.length === 12 && many.hidden === 1, JSON.stringify({ c: many.chips.length, h: many.hidden }));
+
+  const { readFileSync } = await import("node:fs");
+  const insp = readFileSync(new URL("../src/editor/Inspector.tsx", import.meta.url).pathname, "utf8");
+  const invSrc = readFileSync(new URL("../src/editor/inventory.ts", import.meta.url).pathname, "utf8");
+  check("GATE: 元件清单改走一本账，空态文案按构成分档", /componentInventory\(design\)/.test(insp) && /emptyInventoryHint\(inv\)/.test(insp) && !/画布还是空的/.test(insp));
+  check("GATE: 认不出定义与超限类别都摆在清单里，不再静默消失", /inv\.unknown &&/.test(insp) && /inv\.hidden &&/.test(insp));
+  check("GATE: 账本按 label 聚合但保留 boundary／unknown 两笔", /def\.boundary\) boundary\+\+/.test(invSrc) && /unknown\+\+/.test(invSrc));
+}
+
 console.log(`\n${failed === 0 ? "\x1b[32m" : "\x1b[31m"}内核自检：${passed} 通过 / ${failed} 失败\x1b[0m`);
 process.exit(failed === 0 ? 0 : 1);
