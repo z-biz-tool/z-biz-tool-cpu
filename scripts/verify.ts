@@ -1229,7 +1229,7 @@ ok:
 
   // IMP-14: 命中测试 + a11y
   const { buildHitIndex, hitTest, screenToGrid } = await import("../src/editor/hitIndex.ts");
-  const { buildA11y, neighbour, describeFocus } = await import("../src/editor/a11y.ts");
+  const { buildA11y, neighbour, describeFocus, portStructure } = await import("../src/editor/a11y.ts");
   const idx = buildHitIndex(cpu.design.root);
   const a11y = buildA11y(cpu.design.root, cpu.design);
   check("IMP-14: 命中索引覆盖根元件", idx.comps.length === cpu.design.root.comps.length);
@@ -1241,6 +1241,95 @@ ok:
   check("IMP-14: describeFocus 返回描述", typeof desc === "string" && desc.length > 0, desc);
   const g = screenToGrid(0, 0, { x: 0, y: 0, zoom: 1 });
   check("IMP-14: 屏幕转 grid 一致", g.x === 0 && g.y === 0);
+
+  /* doc 02 §10：Canvas 的可访问同伴视图。位图上的总线、缺线必须能被念出来，
+   * 而且念到的位宽要和画布一致——早先 "auto" 一律记成 1 位，4 位总线被念成 1 位。 */
+  {
+    const aw = new CircuitBuilder();
+    const src4 = aw.add("input", 0, 0, { bitWidth: 4 }, { name: "总线" });
+    const n4 = aw.add("not", 3, 0, {}, { name: "反相" });
+    const half = aw.add("and", 3, 4, {}, { name: "半接" });
+    const o4 = aw.add("output", 6, 0, { bitWidth: 4 }, { name: "结果" });
+    aw.link([
+      [src4, "out", n4, "i0"],
+      [n4, "out", o4, "in"],
+      [src4, "out", half, "i0"],
+    ]);
+    const ac = aw.build();
+    const ad: Design = { name: "a11y", root: ac, defs: [] };
+    const live = new Simulator(ad, ac);
+
+    const pin = (m: ReturnType<typeof buildA11y>, comp: string, id: string) =>
+      m.comps.find((c) => c.id === comp)?.pins.find((p) => p.id === id)?.width ?? -1;
+    const staticModel = buildA11y(ac, ad);
+    check("A11Y: 静态端口跟随真实总线位宽", pin(staticModel, n4, "i0") === 4 && pin(staticModel, n4, "out") === 4, `${pin(staticModel, n4, "i0")}/${pin(staticModel, n4, "out")}`);
+    check("A11Y: 实时端口与静态推断一致", pin(buildA11y(ac, ad, live), n4, "out") === pin(staticModel, n4, "out"));
+
+    const struct = portStructure(staticModel);
+    check(
+      "A11Y: 缺线的脚被点名（含名称与位宽）",
+      struct.openPorts.length === 2 &&
+        struct.openPorts.some((t) => /半接/.test(t) && /输入脚 i1/.test(t) && /4 位/.test(t) && /未连接/.test(t)) &&
+        struct.openPorts.some((t) => /半接/.test(t) && /输出脚 out/.test(t) && /未连接/.test(t)),
+      struct.openPorts.join(" | "),
+    );
+    check("A11Y: 端口一句话给出方向和位宽", /i0 输入 4 位/.test(struct.pins.get(half) ?? ""), struct.pins.get(half));
+
+    const fixed = new CircuitBuilder();
+    const b1 = fixed.add("input", 0, 0, { bitWidth: 4 }, { name: "总线" });
+    const b2 = fixed.add("not", 3, 0, {}, { name: "反相" });
+    const b3 = fixed.add("and", 3, 4, {}, { name: "半接" });
+    const b4 = fixed.add("output", 6, 0, { bitWidth: 4 }, { name: "结果" });
+    const b5 = fixed.add("output", 6, 5, { bitWidth: 4 }, { name: "进位" });
+    fixed.link([
+      [b1, "out", b2, "i0"],
+      [b2, "out", b4, "in"],
+      [b1, "out", b3, "i0"],
+      [b2, "out", b3, "i1"],
+      [b3, "out", b5, "in"],
+    ]);
+    const bc = fixed.build();
+    check("A11Y: 接线补齐后未连接清单清空", portStructure(buildA11y(bc, { name: "a11y2", root: bc, defs: [] })).openPorts.length === 0);
+
+    /* 拖动只改坐标：若模型跟着变，读屏会在拖拽时逐帧重念整张表 */
+    const moved: Circuit = {
+      comps: ac.comps.map((c) => ({ ...c, x: c.x + 9, y: c.y - 7 })),
+      wires: ac.wires.map((w) => ({ ...w })),
+    };
+    check("A11Y: 拖动不改变可访问内容", JSON.stringify(buildA11y(moved, ad)) === JSON.stringify(staticModel));
+
+    /* 全部关卡骨架过两遍不变量：
+     *  1) 未连接清单条数 == 模型里没出现在任何导线端点上的引脚数
+     *  2) 静态推断的端口位宽 == 实时网络上的位宽（读屏听到的必须和跑起来看到的一样） */
+    let mismatch = 0;
+    let drift = 0;
+    let inferred = 0;
+    for (const lvl of LEVELS) {
+      const sk = levelDesign(lvl);
+      const m = buildA11y(sk.root, sk);
+      const live = buildA11y(sk.root, sk, new Simulator(sk, sk.root));
+      const ends = new Set<string>();
+      for (const w of m.wires) {
+        ends.add(w.from);
+        ends.add(w.to);
+      }
+      let open = 0;
+      let wideGate = false;
+      m.comps.forEach((c, ci) => {
+        const io = c.type === "input" || c.type === "output";
+        c.pins.forEach((p, pi) => {
+          if (!ends.has(`${c.id}.${p.id}`)) open++;
+          if (!io && p.width > 1) wideGate = true;
+          if (p.width !== live.comps[ci]?.pins[pi]?.width) drift++;
+        });
+      });
+      if (portStructure(m).openPorts.length !== open) mismatch++;
+      if (wideGate) inferred++;
+    }
+    check(`A11Y: ${LEVELS.length} 个骨架的未连接清单逐脚对得上`, mismatch === 0, `${mismatch} 关不一致`);
+    check(`A11Y: ${LEVELS.length} 个骨架的静态位宽与实时网络一致`, drift === 0, `${drift} 个端口不一致`);
+    check(`A11Y: 门/运算元件的位宽来自推断而非写死（${inferred}/${LEVELS.length} 关有 >1 位非 IO 端口）`, inferred > 0, `${inferred}`);
+  }
 
   /* doc 02 §5.2: 运行状态语言 —— HALTED / NON_CONVERGENT / RESOURCE_LIMIT 互不冒充 */
   {
@@ -1890,6 +1979,26 @@ ok:
     check("GATE: warn 有独立于 error 的样式", /\.note\.warn\s*\{/.test(css) && /\.pin-row \.undriven\s*\{/.test(css));
     check("GATE: 引脚行按 driven 标未驱动，而不是只看值", /!v\.driven/.test(inspector) && /className="undriven"/.test(inspector));
     check("GATE: 两个诊断面板共用一套排序", /sortDiags\(result\.errors\)/.test(panel) && /sortDiags\(errors\)/.test(inspector));
+  }
+
+  /* GATE: doc 02 §10 —— 画布不能只留一句替代文本。这里挡的是"可访问视图又被藏回去"：
+   * display:none / visibility:hidden 连读屏一起屏蔽，只有裁剪是"视觉隐藏、辅助技术可见"。 */
+  {
+    const { readFileSync } = await import("node:fs");
+    const canvas = readFileSync(new URL("../src/editor/Canvas.tsx", import.meta.url).pathname, "utf8");
+    const view = readFileSync(new URL("../src/editor/CanvasA11y.tsx", import.meta.url).pathname, "utf8");
+    const css = readFileSync(new URL("../src/index.css", import.meta.url).pathname, "utf8");
+    const rule = css.match(/\.a11y-only\s*\{[^}]*\}/)?.[0] ?? "";
+    check("GATE: 画布挂了可访问同伴视图", /import \{ CanvasA11y \}/.test(canvas) && /<CanvasA11y \/>/.test(canvas));
+    check("GATE: 画布自述用途并指向结构摘要", /aria-label="电路画布[^"]*"/.test(canvas) && /aria-describedby="canvas-a11y-sum"/.test(canvas));
+    check("GATE: 摘要给出元件/导线/缺线/诊断计数", /model\.comps\.length[\s\S]*model\.wires\.length[\s\S]*openPorts\.length[\s\S]*diags\.length/.test(view));
+    check("GATE: 可访问视图靠裁剪隐藏，而不是 display:none", /clip-path:\s*inset/.test(rule) && !/display:\s*none/.test(rule) && !/visibility:\s*hidden/.test(rule), rule.slice(0, 60));
+    check("GATE: 焦点进入时整块显形（焦点可见）", /\.a11y-only:focus-within/.test(css) && /clip-path:\s*none/.test(css));
+    check("GATE: 可访问视图在 Tab 序列里，不是只能靠读屏光标", /id="canvas-a11y"[^\n]*tabIndex=\{0\}/.test(view));
+    check("GATE: 空画布不谎报「所有端口都已连接」", /model\.comps\.length[\s\S]{0,40}画布上还没有元件/.test(view));
+    check("GATE: 表格带行列表头，读屏能对齐单元格", /scope="col"/.test(view) && /scope="row"/.test(view));
+    check("GATE: 实时值由用户主动查询并按 polite 播报", /role="status"/.test(view) && /aria-live="polite"/.test(view) && /读取当前引脚值/.test(view));
+    check("GATE: 结构表只在拓扑变化时重算", /const sig = useMemo/.test(view) && /useMemo\(\(\) => buildA11y\(circuit, design, sim\), \[sig, design, sim\]/.test(view));
   }
 
   // AT-01..AT-12 全验收矩阵

@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import type { Point } from "../core/types.ts";
+import { CanvasA11y } from "./CanvasA11y.tsx";
 import { useEditor } from "./store.ts";
 import type { Scene } from "./render.ts";
 import { THEME, compInRect, compSize, drawScene, hitComp, hitPin, hitWire, makeXform } from "./render.ts";
@@ -195,6 +196,8 @@ export default function Canvas() {
       <canvas
         ref={canvasRef}
         className="canvas"
+        aria-label="电路画布：拖动摆放元件、拉线连接端口"
+        aria-describedby="canvas-a11y-sum"
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
@@ -215,6 +218,7 @@ export default function Canvas() {
         <span style={{ color: THEME.wireHigh }}>带电网络</span>
         <span>滚轮缩放 · 中键/右键/Alt 拖动平移 · Shift 框选 · 双击进入子电路</span>
       </div>
+      <CanvasA11y />
     </div>
   );
 }
