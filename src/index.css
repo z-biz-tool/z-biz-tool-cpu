@@ -524,11 +524,81 @@ input[type="range"]:focus-visible {
   font-size: 11px;
   color: var(--dim);
 }
+/* 工程动作一排。面板只有 216 px，单行 flex 装到第五个按钮就已经挤出边界
+   （.btn 每个约 44 px），所以按 3 列两行排，正好放下新增的「项目历史」。 */
 .pal-foot {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
   gap: 4px;
   padding: 8px;
   border-top: 1px solid var(--edge);
+}
+.pal-foot .btn {
+  padding: 3px 4px;
+  text-align: center;
+  white-space: nowrap;
+}
+.pal-foot .btn em {
+  font-style: normal;
+  font-size: 11px;
+  margin-left: 2px;
+  color: var(--dim);
+}
+/* 行内重命名：顶替原来名称那一格，宽度跟着 flex 走，不把列表撑开 */
+.pal-item.row > .pal-rename {
+  flex: 1;
+  min-width: 0;
+}
+/* 导入报告：通知里逐条列，等宽小字，超出部分由「另有 N 条」收口 */
+.import-report {
+  margin: 4px 0 0;
+  padding-left: 16px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--dim);
+  max-height: 168px;
+  overflow: auto;
+}
+.import-report .more {
+  list-style: none;
+  margin-left: -16px;
+}
+/* 项目历史列表 */
+.rec-list {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 320px;
+  overflow: auto;
+}
+.rec {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--edge-strong);
+  border-radius: 6px;
+  background: var(--panel-2);
+}
+.rec-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.rec-name {
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rec-meta {
+  font-size: 11px;
+  color: var(--dim);
 }
 .hint {
   color: var(--dim);

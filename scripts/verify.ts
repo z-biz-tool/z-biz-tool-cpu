@@ -10,7 +10,7 @@ import { LEVELS, levelDesign, solutionDesign } from "../src/challenges/levels.ts
 import { runLevelTests } from "../src/challenges/verify.ts";
 import { referenceCpu } from "../src/cpu/reference.ts";
 import { runProgram } from "../src/cpu/run.ts";
-import type { Circuit, Design } from "../src/core/types.ts";
+import type { Circuit, CompInstance, Design } from "../src/core/types.ts";
 
 let passed = 0;
 let failed = 0;
@@ -2037,6 +2037,215 @@ ok:
     check("GATE: warn 有独立于 error 的样式", /\.note\.warn\s*\{/.test(css) && /\.pin-row \.undriven\s*\{/.test(css));
     check("GATE: 引脚行按 driven 标未驱动，而不是只看值", /!v\.driven/.test(inspector) && /className="undriven"/.test(inspector));
     check("GATE: 两个诊断面板共用一套排序", /sortDiags\(result\.errors\)/.test(panel) && /sortDiags\(errors\)/.test(inspector));
+  }
+
+  /* RP: doc 02 §6.1 项目历史（恢复点）。「新建／切关／导入／读档／载入参考」会整盘
+   * 换掉设计并清空撤销栈，所以换之前必须先把走掉的那一份立成恢复点；哪些情况不留底
+   * （空设计、与栈顶重复、没动过的关卡骨架）、上限怎么裁、写不进本地存储怎么改口，
+   * 都在这里守住。 */
+  {
+    const rec = await import("../src/core/recovery.ts");
+    type RP = ReturnType<typeof rec.pushPoint>[number];
+    const ser = await import("../src/core/serialize.ts");
+    const { emptyDesign, serialize } = ser;
+    const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+    const store = new Map<string, string>();
+    let quotaBroken = false;
+    const ls = {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => {
+        if (quotaBroken) throw new Error("QuotaExceededError");
+        store.set(k, v);
+      },
+      removeItem: (k: string) => void store.delete(k),
+      key: (i: number) => [...store.keys()][i] ?? null,
+      get length() {
+        return store.size;
+      },
+    };
+    (globalThis as any).window = { localStorage: ls, addEventListener: () => {} };
+
+    const cmp = (id: string, x = 0, y = 0): CompInstance => ({ id, type: "and", x, y, rot: 0, params: {} });
+    const workDesign = (tag: string, n = 2): Design => ({
+      name: tag,
+      root: { comps: Array.from({ length: n }, (_, i) => cmp(`${tag}-${i}`, i, 0)), wires: [] },
+      defs: [],
+    });
+
+    check("RP: 空设计不算成果", !rec.designHasWork(emptyDesign("t")));
+    check(
+      "RP: 画布上有东西算成果",
+      rec.designHasWork(workDesign("t")) && rec.designHasWork({ name: "t", root: { comps: [], wires: [] }, defs: [{ id: "d1", name: "s", circuit: { comps: [cmp("a")], wires: [] } }] })
+    );
+    const one = rec.pushPoint([], workDesign("A"), "新建空白设计");
+    check("RP: 纯函数留底带上动作与规模", one.length === 1 && one[0].reason === "新建空白设计" && one[0].comps === 2, JSON.stringify(one[0]));
+    check("RP: 空设计不留底", rec.pushPoint(one, emptyDesign("t"), "新建空白设计") === one);
+    check("RP: 与栈顶同一份不重复堆", rec.pushPoint(one, workDesign("A"), "读回存档") === one);
+    check("RP: 关卡归属随恢复点带回去", rec.pushPoint([], workDesign("A"), "切关", "lv-3")[0].levelId === "lv-3");
+    let pts: RP[] = [];
+    for (let i = 0; i < 25; i++) pts = rec.pushPoint(pts, workDesign("p" + i, (i % 5) + 1), "切关");
+    check("RP: 条数封顶，最新的在栈顶", pts.length === rec.MAX_POINTS && pts[0].name === "p24", `${pts.length}/${pts[0]?.name}`);
+    check("RP: 淘汰的是最旧那份", pts[pts.length - 1].name === "p15", pts[pts.length - 1].name);
+    let fat: RP[] = [];
+    const huge = (tag: string): Design => ({ name: tag, root: { comps: [cmp("a")], wires: [] }, defs: [] });
+    for (let i = 0; i < 14; i++) fat = rec.pushPoint(fat, huge("h" + i + "-" + "x".repeat(300_000)), "切关");
+    check(
+      "RP: 超字节预算先丢最旧的，最新那份一定保住",
+      fat.length < rec.MAX_POINTS && fat[0].name.startsWith("h13-") && fat.length >= 2,
+      `${fat.length} 份 / 栈顶 ${fat[0]?.name.slice(0, 4)}`
+    );
+
+    const { useEditor: rpBase } = await import("../src/editor/store.ts");
+    const rpPath = "../src/editor/store.ts?tab=rp";
+    const rpTab: typeof rpBase = (await import(rpPath) as { useEditor: typeof rpBase }).useEditor;
+    const st = () => rpTab.getState();
+    st().newDesign();
+    await wait(50);
+    check("RP: 开机手上是空设计，没有历史", st().recovery.length === 0 && st().recoverySaved, JSON.stringify([st().recovery.length, st().recoverySaved]));
+    st().placeComp("input", 1, 1);
+    st().placeComp("and", 4, 4);
+    st().newDesign();
+    check("RP: 新建把走掉的那份立成恢复点", st().recovery.length === 1 && st().recovery[0].comps === 2, JSON.stringify(st().recovery.map((p) => [p.reason, p.comps])));
+    check("RP: 新建之后撤销栈确实是空的", st().undo.length === 0 && st().redo.length === 0);
+    check("RP: 恢复点落到本地存储", !!store.get(rec.RECOVERY_STORE_KEY), [...store.keys()].join(","));
+    st().newDesign();
+    check("RP: 空设计接着新建不会自涨历史", st().recovery.length === 1);
+
+    st().startLevel(LEVELS[0].id);
+    check("RP: 没动过的关卡骨架不留底", st().recovery.length === 1, JSON.stringify(st().recovery.map((p) => p.reason)));
+    st().placeComp("and", 9, 9);
+    st().startLevel(LEVELS[1].id);
+    check(
+      "RP: 改过的关卡切走时留底，并记住当时在哪一关",
+      st().recovery.length === 2 && st().recovery[0].levelId === LEVELS[0].id,
+      JSON.stringify(st().recovery.map((p) => [p.reason, p.levelId]))
+    );
+    st().placeComp("and", 20, 20);
+    const sandboxPoint = st().recovery[1];
+    check(
+      "RP: 恢复回到那一份设计，关卡归属一起回",
+      st().restoreRecovery(sandboxPoint.id) &&
+        st().design.name === "自由搭建" &&
+        st().design.root.comps.length === 2 &&
+        st().levelId === null &&
+        st().mode === "sandbox",
+      JSON.stringify([st().design.name, st().design.root.comps.length, st().levelId, st().mode])
+    );
+    check("RP: 恢复不是单向操作，手上这份也先留底", st().recovery.length === 3 && st().recovery[0].levelId === LEVELS[1].id, JSON.stringify(st().recovery.map((p) => [p.name, p.levelId])));
+    check("RP: 恢复不占用撤销栈", st().undo.length === 0);
+    const beforeMiss = st().design.name;
+    check("RP: 未知恢复点只报失败，不动画布", !st().restoreRecovery("rp-none") && st().design.name === beforeMiss);
+    st().forgetRecovery(st().recovery[0].id);
+    check("RP: 单条删除同步落盘", st().recovery.length === 2 && JSON.parse(store.get(rec.RECOVERY_STORE_KEY) ?? "[]").length === 2, String(st().recovery.length));
+    st().clearRecovery();
+    check("RP: 清空历史把本地存储一起清掉", st().recovery.length === 0 && !store.get(rec.RECOVERY_STORE_KEY));
+
+    /* 导入分两步：先解析报成败，落地由调用方触发 —— 失败的文件绝不能碰画布 */
+    st().newDesign();
+    st().placeComp("and", 1, 1);
+    const emptyBefore = st().recovery.length;
+    const broken = st().importText("{不是 json");
+    check(
+      "RP: 解析失败给出原因，画布与历史都不动",
+      !broken.ok && broken.report.length > 0 && st().design.name !== "导入的" && st().recovery.length === emptyBefore && st().design.root.comps.length === 1,
+      JSON.stringify([broken.report, st().design.name, st().recovery.length])
+    );
+    const dirty = st().importText(serialize({ name: "导入的", root: { comps: [cmp("a")], wires: [{ a: { comp: "a", pin: "out" }, b: { comp: "zz", pin: "in" }, width: 1 }] }, defs: [] } as unknown as Design));
+    check("RP: 导入成功前也不落地", dirty.ok && st().design.name !== "导入的" && st().recovery.length === emptyBefore);
+    dirty.apply();
+    check(
+      "RP: apply 才真正换设计，并给走掉那份留底",
+      st().design.name === "导入的" && st().recovery.length === emptyBefore + 1 && st().recovery[0].reason === "导入外部设计",
+      JSON.stringify([st().design.name, st().recovery.map((p) => p.reason)])
+    );
+    check("RP: 修掉的引用随报告带出，不静默丢弃", dirty.report.length > 0, dirty.report.join(" | "));
+
+    const rp2Path = "../src/editor/store.ts?tab=rp2";
+    const rpTab2: typeof rpBase = (await import(rp2Path) as { useEditor: typeof rpBase }).useEditor;
+    check("RP: 刷新后历史从本地存储读回", rpTab2.getState().recovery.length === st().recovery.length, JSON.stringify([rpTab2.getState().recovery.map((p) => p.name), st().recovery.map((p) => p.name)]));
+    quotaBroken = true;
+    rpTab2.getState().newDesign();
+    rpTab2.getState().placeComp("and", 2, 2);
+    rpTab2.getState().newDesign();
+    check("RP: 写不进本地存储时如实改口", rpTab2.getState().recoverySaved === false && rpTab2.getState().recovery.length > 0, JSON.stringify([rpTab2.getState().recoverySaved, rpTab2.getState().recovery.length]));
+    quotaBroken = false;
+    rpTab2.getState().placeComp("and", 6, 6);
+    rpTab2.getState().newDesign();
+    check("RP: 能写回去之后就恢复报已保存", rpTab2.getState().recoverySaved === true);
+
+    store.set(rec.RECOVERY_STORE_KEY, "{坏掉的 json");
+    check("RP: 历史文件坏了不影响开机", rec.loadPoints().length === 0);
+    store.set(rec.RECOVERY_STORE_KEY, "42");
+    check("RP: 顶层不是数组也不抛", rec.loadPoints().length === 0);
+    store.set(
+      rec.RECOVERY_STORE_KEY,
+      JSON.stringify([
+        { id: "x", reason: "r", at: 9, design: { name: "缺 root" } },
+        { id: "y", reason: "r2", at: 5, design: workDesign("ok") },
+        { reason: "没有 id", design: workDesign("no-id") },
+      ])
+    );
+    const repaired = rec.loadPoints();
+    check("RP: 坏的那条整条丢掉，好的照旧读回", repaired.length === 1 && repaired[0].id === "y", JSON.stringify(repaired.map((p) => p.id)));
+
+    delete (globalThis as any).window;
+  }
+
+  /* GATE: doc 02 §6.1 与"非阻断播报"的接线。上面的行为测试跑的是 store，测不到界面
+   * 有没有把结果说出来：原生 alert/prompt/confirm 不受主题与焦点管理、读屏也读不到；
+   * antd 的静态方法脱离 ConfigProvider，深色主题和 zh_CN 文案都会丢；整盘替换设计的
+   * 入口只要漏掉一个 park()，就有路径能悄悄吃掉用户成果。这些都是会回潮的错。 */
+  {
+    const { readdirSync, readFileSync } = await import("node:fs");
+    const files: string[] = [];
+    const walk = (dir: string) => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const p = dir + "/" + e.name;
+        if (e.isDirectory()) walk(p);
+        else if (/\.(ts|tsx)$/.test(e.name)) files.push(p);
+      }
+    };
+    const root = new URL("../src", import.meta.url).pathname;
+    walk(root);
+    /* 注释里提到旧写法不算违规（本文件自己的说明就提） */
+    const code = (p: string) =>
+      readFileSync(p, "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/[^\n]*/g, "$1");
+    const hits = (re: RegExp) =>
+      files.filter((p) => re.test(code(p))).map((p) => p.replace(root + "/", "")).join(",");
+    check("GATE: 界面里没有原生 alert / prompt / confirm", !hits(/\bwindow\.(alert|prompt|confirm)\s*\(/), hits(/\bwindow\.(alert|prompt|confirm)\s*\(/));
+    check(
+      "GATE: 确认框与通知走 context 版，不用 antd 静态方法",
+      !hits(/\bModal\.(confirm|info|success|warning|error)\s*\(|\bnotification\.[a-z]+\s*\(|\bmessage\.(open|info|success|warning|error)\s*\(/),
+      hits(/\bModal\.(confirm|info|success|warning|error)\s*\(|\bnotification\.[a-z]+\s*\(|\bmessage\.(open|info|success|warning|error)\s*\(/)
+    );
+    const app = code(root + "/App.tsx");
+    const palette = code(root + "/editor/Palette.tsx");
+    check("GATE: 应用外壳包了 antd <App>，通知才拿得到主题与文案", /<AntdApp component=\{false\}>/.test(app) && /import \{ App as AntdApp/.test(app));
+    check("GATE: 元件库从 App.useApp() 取 modal 与 notification", /const \{ modal, notification \} = App\.useApp\(\)/.test(palette));
+    check("GATE: 项目历史有入口，按钮上直接带留底条数", /历史<em>\{recovery\.length\}<\/em>/.test(palette) && /title="项目历史"|open=\{history\}/.test(palette));
+    check("GATE: 导入被修过引用时报 warning，不报成功", /report\.length \? "warning" : "success"/.test(palette));
+    check(
+      "GATE: 读不到存档 / 写不进存储都要说人话",
+      /本地还没有存档/.test(palette) && /存档没写进去/.test(palette)
+    );
+    const storeSrc = code(root + "/editor/store.ts");
+    const body = (sig: string) => {
+      const esc = sig.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      return storeSrc.match(new RegExp("\\n    " + esc + " \\{([\\s\\S]*?)\\n    \\},"))?.[1] ?? "!";
+    };
+    const entries = [
+      "newDesign()",
+      "loadFrom(key)",
+      "importText(text)",
+      "loadDesign(design)",
+      "startLevel(id)",
+      "openSandbox()",
+      "openConflictCopy()",
+      "restoreRecovery(id)",
+    ];
+    const missing = entries.filter((e) => !/\bpark\(/.test(body(e)));
+    check("GATE: 整盘替换设计的入口全部先立恢复点", missing.length === 0, missing.join(","));
+    check("GATE: 留底比较不带时间戳（serialize 会写 savedAt）", !/serialize\(levelDesign/.test(storeSrc) && /sameDesign\(levelDesign/.test(storeSrc));
   }
 
   /* GATE: doc 02 §10 —— 画布不能只留一句替代文本。这里挡的是"可访问视图又被藏回去"：

@@ -1,4 +1,4 @@
-import { ConfigProvider, Tabs, Tooltip, theme } from "antd";
+import { App as AntdApp, ConfigProvider, Tabs, Tooltip, theme } from "antd";
 import zhCN from "antd/locale/zh_CN";
 import { useEffect, useMemo } from "react";
 import Canvas from "./editor/Canvas.tsx";
@@ -17,6 +17,11 @@ import type { PanelKey } from "./editor/store.ts";
 
 /* ------------------------------------------------------------------ *
  * 应用外壳：顶栏 + 元件库 + 画布 + 右侧多面板
+ *
+ * antd 的 <App> 是给子组件拿 context 版 message/notification/modal 用的：
+ * 静态方法（notification.xxx）走自己的渲染上下文，读不到这里的深色主题和
+ * zh_CN 文案，所以工程动作的结果播报一律从 App.useApp() 取。component={false}
+ * 让它不再包一层 div，免得打乱 .app 的网格布局。
  * ------------------------------------------------------------------ */
 
 const TABS: { key: PanelKey; label: string | ((i: TabInfo) => React.ReactNode); render: () => React.ReactNode }[] = [
@@ -163,29 +168,31 @@ export default function App() {
         },
       }}
     >
-      <div className="app">
-        <A11yAnnouncer />
-        <Toolbar />
-        <div className="app-body">
-          <Palette />
-          <main className="stage">
-            <Canvas />
-          </main>
-          <aside className="rail">
-            <Tabs
-              size="small"
-              activeKey={panel}
-              onChange={(k) => useEditor.getState().setPanel(k as PanelKey)}
-              items={TABS.map((t) => ({
-                key: t.key,
-                label: typeof t.label === "function" ? t.label({ count: named }) : t.label,
-                children: t.key === panel ? t.render() : null,
-              }))}
-            />
-          </aside>
+      <AntdApp component={false}>
+        <div className="app">
+          <A11yAnnouncer />
+          <Toolbar />
+          <div className="app-body">
+            <Palette />
+            <main className="stage">
+              <Canvas />
+            </main>
+            <aside className="rail">
+              <Tabs
+                size="small"
+                activeKey={panel}
+                onChange={(k) => useEditor.getState().setPanel(k as PanelKey)}
+                items={TABS.map((t) => ({
+                  key: t.key,
+                  label: typeof t.label === "function" ? t.label({ count: named }) : t.label,
+                  children: t.key === panel ? t.render() : null,
+                }))}
+              />
+            </aside>
+          </div>
+          <PackageMetaDialog />
         </div>
-        <PackageMetaDialog />
-      </div>
+      </AntdApp>
     </ConfigProvider>
   );
 }

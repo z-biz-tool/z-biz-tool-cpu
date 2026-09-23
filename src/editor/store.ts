@@ -5,6 +5,8 @@ import { customCost, defOf, pinProblem, totalCost } from "../core/custom.ts";
 import { baseDef, defaultParams } from "../core/registry.ts";
 import { cloneDesign, emptyDesign, loadSlot, parse, saveSlot, serialize } from "../core/serialize.ts";
 import { DRAFT_LOCK, DraftWriter, EditRight } from "../core/draft.ts";
+import { clearPoints, loadPoints, pushPoint, sameDesign, savePoints } from "../core/recovery.ts";
+import type { RecoveryPoint } from "../core/recovery.ts";
 import type { Circuit, CompInstance, CustomDef, Design, PinRef, Point, Rot, Wire } from "../core/types.ts";
 import { GRID, uid } from "../core/types.ts";
 import { levelById, levelDesign } from "../challenges/levels.ts";
@@ -97,6 +99,10 @@ export interface EditorState {
   pendingMeta: { defId: string } | null;
   /** doc 02 §5.3：草稿落盘状态，独立于运行状态 */
   save: SaveState;
+  /** doc 02 §6.1：被「新建／切关／导入」整盘换掉的设计留下的恢复点，最新的在前 */
+  recovery: RecoveryPoint[];
+  /** 恢复点是否真的写进了本地存储（false = 只有本次会话能回） */
+  recoverySaved: boolean;
 
   circuit(): Circuit;
   isRoot(): boolean;
@@ -176,9 +182,20 @@ export interface EditorState {
   /** 直接载入一台现成设计（如参考 CPU） */
   loadDesign(design: Design): void;
   newDesign(): void;
-  /** 导入设计；返回给用户的报告（错误 + 导入时修掉的问题），空数组表示原样可用 */
-  importText(text: string): string[];
+  /**
+   * 解析导入文本，**不动画布**，返回 apply 让调用方决定何时落地。
+   * 分成两步是因为导入是整盘替换：界面要先立恢复点、再把报告如实念给用户。
+   * ok=false → report 是失败原因（此时 apply 为空操作）；
+   * ok=true 且 report 非空 → 载入成功，但引用问题被修过，必须报给导入者（doc 05 §3.3）。
+   */
+  importText(text: string): { ok: boolean; report: string[]; apply: () => void };
   exportText(): string;
+  /** 回到某个恢复点；当前这份同样先立一个新恢复点，所以来回切不丢东西 */
+  restoreRecovery(id: string): boolean;
+  /** 只忘掉一条恢复点 */
+  forgetRecovery(id: string): void;
+  /** 清空项目历史 */
+  clearRecovery(): void;
 
   startLevel(id: string): void;
   openSandbox(): void;
@@ -240,6 +257,7 @@ export const useEditor = create<EditorState>((set, get) => {
   const initialDesign = bootedFromDraft ?? emptyDesign("自由搭建");
   const initialProgress = loadProgress();
   const initialWorkshop = loadWorkshopLocal();
+  const initialRecovery = loadPoints();
   let sim = new Simulator(initialDesign, currentCircuit(initialDesign, "root"));
 
   const conflictNote = (res: { copyKey: string; copyName: string; by: string }) => {
@@ -324,6 +342,22 @@ export const useEditor = create<EditorState>((set, get) => {
     touchDraft();
   };
 
+  /**
+   * doc 02 §6.1：新建／切关／查看参考这一类整盘替换「不靠跨项目撤销保命」，
+   * 所以换之前先把走掉的那一份立成恢复点。撤销栈该清还是清 —— 跨项目的快照
+   * 混进本项目的撤销历史，撤出来的是别人的半成品电路。
+   * 空设计与「和栈顶同一份」由 pushPoint 挡掉，来回切同一批关卡不会堆历史。
+   */
+  const park = (reason: string) => {
+    const st = get();
+    /* 没动过的关卡骨架不是用户成果，不该挤掉真正的历史 */
+    const level = st.levelId ? levelById(st.levelId) : undefined;
+    if (level && sameDesign(levelDesign(level), st.design)) return;
+    const next = pushPoint(st.recovery, st.design, reason, st.levelId);
+    if (next === st.recovery) return;
+    set({ recovery: next, recoverySaved: savePoints(next) });
+  };
+
   return {
     design: initialDesign,
     view: "root",
@@ -359,6 +393,8 @@ export const useEditor = create<EditorState>((set, get) => {
       ? { label: "saved", savedRevision: 0, currentRevision: 0 }
       : { label: "unsaved", savedRevision: 0, currentRevision: 0 },
     pendingMeta: null,
+    recovery: initialRecovery,
+    recoverySaved: true,
 
     circuit() {
       const st = get();
@@ -936,32 +972,43 @@ export const useEditor = create<EditorState>((set, get) => {
       if (!info?.copyKey) return false;
       const design = loadSlot(info.copyKey);
       if (!design) return false;
+      park("打开冲突副本");
       replace(design, "root");
       return true;
     },
     loadFrom(key) {
       const design = loadSlot(key);
       if (!design) return false;
+      park("读回存档");
       set({ levelId: null, mode: "sandbox", selection: { comps: [], wires: [] } });
       replace(design, "root");
       return true;
     },
     newDesign() {
+      park("新建空白设计");
       set({ levelId: null, mode: "sandbox", selection: { comps: [], wires: [] }, undo: [], redo: [] });
       replace(emptyDesign("自由搭建"), "root");
     },
     loadDesign(design) {
+      park("载入参考设计");
       set({ levelId: null, mode: "sandbox", selection: { comps: [], wires: [] }, panel: "cpu" });
       replace(design, "root");
       get().fitView();
     },
     importText(text) {
       const res = parse(text);
-      if (!res.design) return res.errors.length ? res.errors : ["文件无法解析"];
-      set({ levelId: null, mode: "sandbox", selection: { comps: [], wires: [] } });
-      replace(res.design, "root");
-      // doc 05 §3.3：导入修掉的引用问题要报给导入者，不能静默丢弃后当作正常工程
-      return res.errors.concat(res.warnings);
+      if (!res.design) return { ok: false, report: res.errors.length ? res.errors : ["文件无法解析"], apply: () => {} };
+      const report = res.errors.concat(res.warnings);
+      const design = res.design;
+      return {
+        ok: true,
+        report,
+        apply: () => {
+          park("导入外部设计");
+          set({ levelId: null, mode: "sandbox", selection: { comps: [], wires: [] } });
+          replace(design, "root");
+        },
+      };
     },
     exportText() {
       return serialize(get().design);
@@ -970,6 +1017,7 @@ export const useEditor = create<EditorState>((set, get) => {
     startLevel(id) {
       const level = levelById(id);
       if (!level) return;
+      park("切换到关卡 " + level.name);
       set({
         levelId: id,
         mode: "level",
@@ -986,6 +1034,7 @@ export const useEditor = create<EditorState>((set, get) => {
       set({ progress });
     },
     openSandbox() {
+      park("进入自由搭建沙盒");
       set({
         levelId: null,
         mode: "sandbox",
@@ -994,7 +1043,38 @@ export const useEditor = create<EditorState>((set, get) => {
         undo: [],
         redo: [],
       });
-      replace(loadSlot("sandbox") ?? emptyDesign("自由搭建"), "root");
+      // 沙盒没有专属存档位：离开时那份已经进了项目历史，要回去走「项目历史」
+      replace(emptyDesign("自由搭建"), "root");
+    },
+    restoreRecovery(id) {
+      const st = get();
+      const point = st.recovery.find((p) => p.id === id);
+      if (!point) return false;
+      /* 恢复不是单向操作：手上这份也先留底，来回切都不丢 */
+      park("回到项目历史里的「" + point.name + "」");
+      const level = point.levelId ? levelById(point.levelId) : undefined;
+      set({
+        levelId: level ? point.levelId : null,
+        mode: level ? "level" : "sandbox",
+        panel: level ? "level" : "inspector",
+        running: false,
+        earned: [],
+        selection: { comps: [], wires: [] },
+        undo: [],
+        redo: [],
+      });
+      replace(point.design, "root");
+      return true;
+    },
+    forgetRecovery(id) {
+      const st = get();
+      const next = st.recovery.filter((p) => p.id !== id);
+      if (next.length === st.recovery.length) return;
+      set({ recovery: next, recoverySaved: savePoints(next) });
+    },
+    clearRecovery() {
+      clearPoints();
+      set({ recovery: [], recoverySaved: true });
     },
     checkLevel() {
       const st = get();
