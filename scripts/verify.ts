@@ -2674,5 +2674,103 @@ ok:
   check("GATE: 删掉「永远返回空 id」的死映射不再骗人", !/idForWorld|metaByLevelMap/.test(codeOf("../src/courses/publishMetadata.ts")));
 }
 
+  /* ---------------------------------------------------------------- *
+   * RB：带着关卡的半成品重启，回到那一关（doc 02 §5.3 草稿归属）
+   * ---------------------------------------------------------------- */
+  {
+    const ser = await import("../src/core/serialize.ts");
+    const lv = await import("../src/challenges/levels.ts");
+    const skeleton = lv.levelDesign(lv.levelById("t1-halfadd")!);
+
+    /** 装一个干净的本地存储、塞好草稿原文（和进度），再让 store 从头 boot 一次 */
+    const bootWith = async (text: string | null, tag: string, progress?: string) => {
+      const store = new Map<string, string>();
+      const ls = {
+        getItem: (k: string) => store.get(k) ?? null,
+        setItem: (k: string, v: string) => void store.set(k, v),
+        removeItem: (k: string) => void store.delete(k),
+        key: (i: number) => [...store.keys()][i] ?? null,
+        get length() {
+          return store.size;
+        },
+      };
+      (globalThis as any).window = { localStorage: ls, addEventListener: () => {} };
+      (globalThis as any).localStorage = ls;
+      if (text !== null) store.set(ser.SLOT_PREFIX + "autosave", text);
+      if (progress) store.set("z-biz-tool-cpu:progress", progress);
+      const path = `../src/editor/store.ts?tab=${tag}`;
+      const mod = (await import(path)) as { useEditor: { getState: () => any } };
+      delete (globalThis as any).window;
+      delete (globalThis as any).localStorage;
+      return mod.useEditor.getState();
+    };
+
+    const withLevel = await bootWith(ser.serialize(skeleton, "t1-halfadd"), "rb-level");
+    check(
+      "RB: 带着关卡草稿重启回到那一关",
+      withLevel.levelId === "t1-halfadd" && withLevel.mode === "level",
+      JSON.stringify([withLevel.levelId, withLevel.mode])
+    );
+    check(
+      "RB: 回到关卡时半成品一个不丢",
+      withLevel.design.root.comps.length === skeleton.root.comps.length,
+      `${withLevel.design.root.comps.length}/${skeleton.root.comps.length}`
+    );
+
+    const old = await bootWith(ser.serialize(skeleton), "rb-old");
+    check("RB: 老草稿没有关卡绑定时仍按沙盒开机", old.levelId === null && old.mode === "sandbox");
+
+    /* 老草稿没写关卡绑定：退一步认「上次在哪一关 + 手上这份就是那一关的骨架」 */
+    const legacy = await bootWith(ser.serialize(skeleton), "rb-legacy", '{"active":"t1-halfadd","done":{},"badges":[],"speed":8}');
+    check(
+      "RB: 老草稿认得出上次那一关的骨架",
+      legacy.levelId === "t1-halfadd" && legacy.mode === "level",
+      JSON.stringify([legacy.levelId, legacy.mode])
+    );
+    const mismatch = await bootWith(ser.serialize(skeleton), "rb-mismatch", '{"active":"t1-gates","done":{},"badges":[],"speed":8}');
+    check("RB: 老草稿结构对不上就不硬认", mismatch.levelId === null && mismatch.mode === "sandbox");
+    const noDraft = await bootWith(null, "rb-nodraft", '{"active":"t1-halfadd","done":{},"badges":[],"speed":8}');
+    check("RB: 没有草稿时不凭空进关", noDraft.levelId === null && noDraft.mode === "sandbox");
+
+    const fnPath = "../src/editor/store.ts?tab=rb-fn";
+    const { looksLikeLevelSkeleton } = (await import(fnPath)) as {
+      looksLikeLevelSkeleton: (d: Design, id: string) => boolean;
+    };
+    check("RB: 骨架识别认同一批元件", looksLikeLevelSkeleton(skeleton, "t1-halfadd") === true);
+    check("RB: 骨架识别不被坐标糊弄", looksLikeLevelSkeleton({ ...skeleton, root: { ...skeleton.root, comps: skeleton.root.comps.map((c: any) => ({ ...c, x: c.x + 3 })) } }, "t1-halfadd") === true);
+    check(
+      "RB: 多拉一根线就不再算骨架",
+      looksLikeLevelSkeleton({ ...skeleton, root: { ...skeleton.root, wires: skeleton.root.wires.concat([{ id: "wx", a: { comp: skeleton.root.comps[0]!.id, pin: "out" }, b: { comp: skeleton.root.comps[1]!.id, pin: "in" } }] as any) } }, "t1-halfadd") === false
+    );
+    check("RB: 不存在的关卡无从相似", looksLikeLevelSkeleton(skeleton, "t9-never") === false);
+
+    const sand = await bootWith(ser.serialize(ser.emptyDesign("自由搭建"), null), "rb-sandbox");
+    check("RB: 沙盒草稿不会凭空认一个关卡", sand.levelId === null && sand.mode === "sandbox");
+
+    const junk = await bootWith("{ 坏 JSON", "rb-junk");
+    check("RB: 草稿读不动时安静回到沙盒", junk.levelId === null && junk.design.root.comps.length === 0);
+
+    const ghost = await bootWith(ser.serialize(skeleton, "t9-never"), "rb-ghost");
+    check("RB: 关卡被删掉后不认不存在的关", ghost.levelId === null && ghost.mode === "sandbox");
+
+    /* 关卡绑定只属于草稿：导出文件、冲突副本都不该带上它 */
+    check("RB: 导出文件不带本工具的关卡绑定", !/"levelId"/.test(ser.serialize(skeleton)));
+    check(
+      "RB: 多了 levelId 也不改变解析出来的设计",
+      JSON.stringify(ser.parse(ser.serialize(skeleton, "t1-halfadd")).design) === JSON.stringify(ser.parse(ser.serialize(skeleton)).design)
+    );
+    check("RB: slotLevelId 只认字段，坏文本不抛", ser.slotLevelId("{") === "" && ser.slotLevelId(JSON.stringify({ levelId: "x" })) === "x");
+
+    const { readFileSync } = await import("node:fs");
+    const draftSrc = readFileSync(new URL("../src/core/draft.ts", import.meta.url).pathname, "utf8");
+    const storeSrc = readFileSync(new URL("../src/editor/store.ts", import.meta.url).pathname, "utf8");
+    check("GATE: 每次自动存档都带上当前关卡归属", /draft\.commit\(get\(\)\.design, get\(\)\.levelId\)/.test(storeSrc));
+    check(
+      "GATE: 开机初值读草稿的关卡绑定",
+      storeSrc.includes("levelId: bootLevel?.id ?? null") && /mode: bootLevel \? "level" : "sandbox"/.test(storeSrc)
+    );
+    check("GATE: 冲突副本不认领关卡", /serialize\(\{ \.\.\.design, name \}\)/.test(draftSrc) && !/serialize\(\{ \.\.\.design, name \}, levelId\)/.test(draftSrc));
+  }
+
 console.log(`\n${failed === 0 ? "\x1b[32m" : "\x1b[31m"}内核自检：${passed} 通过 / ${failed} 失败\x1b[0m`);
 process.exit(failed === 0 ? 0 : 1);

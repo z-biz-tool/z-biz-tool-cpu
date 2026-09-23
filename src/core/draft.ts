@@ -1,4 +1,4 @@
-import { deleteSlot, parse, readSlotText, serialize, slotSavedAt, writeSlotText } from "./serialize.ts";
+import { deleteSlot, parse, readSlotText, serialize, slotLevelId, slotSavedAt, writeSlotText } from "./serialize.ts";
 import type { Design } from "./types.ts";
 
 /* ------------------------------------------------------------------ *
@@ -39,6 +39,8 @@ function copyName(design: Design): string {
 export class DraftWriter {
   /** 本页最后读到 / 写出的草稿原文，null = 当时是空的 */
   private seen: string | null = null;
+  /** 最近一次 load／commit 时草稿挂靠的关卡 */
+  private loadedLevel = "";
   private conflict: ConflictInfo | null = null;
   private readonly key: string;
   /** 没有编辑权就不碰共享草稿；缺省为一直有权（不支持 Web Locks 的环境） */
@@ -58,14 +60,20 @@ export class DraftWriter {
   load(): Design | undefined {
     const text = readSlotText(this.key);
     this.seen = text;
+    this.loadedLevel = text ? slotLevelId(text) : "";
     return text ? parse(text).design : undefined;
+  }
+
+  /** 这份草稿属于哪一关（老草稿／沙盒草稿为空串）；开机回到关卡靠它 */
+  get loadedLevelId() {
+    return this.loadedLevel;
   }
 
   conflictInfo(): ConflictInfo | null {
     return this.conflict;
   }
 
-  commit(design: Design): DraftWrite {
+  commit(design: Design, levelId?: string | null): DraftWrite {
     if (!this.mayWrite()) return { kind: "no-right" };
     if (this.conflict) return { kind: "blocked", ...this.conflict };
     const cur = readSlotText(this.key);
@@ -76,9 +84,10 @@ export class DraftWriter {
       this.conflict = saved ? info : { ...info, copyKey: "", copyName: "" };
       return { kind: "conflict", ...this.conflict };
     }
-    const text = serialize(design);
+    const text = serialize(design, levelId);
     if (!writeSlotText(this.key, text)) return { kind: "failed", error: "浏览器本地存储写入失败（配额已满或被禁用）" };
     this.seen = text;
+    this.loadedLevel = levelId ?? "";
     return { kind: "written" };
   }
 

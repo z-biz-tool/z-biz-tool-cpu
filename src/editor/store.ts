@@ -244,6 +244,23 @@ function defaultParamsOf(type: string): Record<string, number | string | boolean
 
 const pinKey = (ref: PinRef) => ref.comp + "." + ref.pin;
 
+/**
+ * 这份设计看起来就是某一关的骨架吗（元件同一批、导线同数、子电路同数）。
+ * 只用来认「没写关卡绑定的老草稿」：认错的代价不过是多出一个判题入口 ——
+ * 结构一致的那一份本来就是同一关的半成品，坐标与参数都不动。
+ */
+export function looksLikeLevelSkeleton(design: Design, levelId: string): boolean {
+  const level = levelById(levelId);
+  if (!level) return false;
+  const sk = levelDesign(level);
+  const ids = (c: Circuit) => c.comps.map((x) => x.id).sort().join(",");
+  return (
+    ids(sk.root) === ids(design.root) &&
+    sk.root.wires.length === design.root.wires.length &&
+    (sk.defs?.length ?? 0) === (design.defs?.length ?? 0)
+  );
+}
+
 export const useEditor = create<EditorState>((set, get) => {
   /* ------------------------------------------------------------------ *
    * doc 02 §5.3：自动存档走保存状态机
@@ -256,6 +273,12 @@ export const useEditor = create<EditorState>((set, get) => {
   const bootedFromDraft = draft.load();
   const initialDesign = bootedFromDraft ?? emptyDesign("自由搭建");
   const initialProgress = loadProgress();
+  /* 草稿自己说得出属于哪一关：带着关卡的半成品重启后回到那一关，而不是把判题上下文
+   * 丢掉、面板还对着它说「沙盒模式没有判题」。老草稿没写这一条时认骨架兜底。 */
+  const bootLevel = !bootedFromDraft
+    ? undefined
+    : (levelById(draft.loadedLevelId) ??
+      (looksLikeLevelSkeleton(initialDesign, initialProgress.active) ? levelById(initialProgress.active) : undefined));
   const initialWorkshop = loadWorkshopLocal();
   const initialRecovery = loadPoints();
   let sim = new Simulator(initialDesign, currentCircuit(initialDesign, "root"));
@@ -285,7 +308,7 @@ export const useEditor = create<EditorState>((set, get) => {
   const commitDraft = () => {
     const rev = get().save.currentRevision;
     set({ save: nextSaveState(get().save, { type: "flush-start" }) });
-    const res = draft.commit(get().design);
+    const res = draft.commit(get().design, get().levelId);
     if (res.kind === "written") {
       set({ save: nextSaveState(get().save, { type: "flush-success", revision: rev }) });
     } else if (res.kind === "failed") {
@@ -377,8 +400,8 @@ export const useEditor = create<EditorState>((set, get) => {
     undo: [],
     redo: [],
     transactionOpen: false,
-    levelId: null,
-    mode: "sandbox",
+    levelId: bootLevel?.id ?? null,
+    mode: bootLevel ? "level" : "sandbox",
     result: null,
     progress: initialProgress,
     earned: [],

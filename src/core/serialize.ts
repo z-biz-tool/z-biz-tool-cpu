@@ -19,10 +19,17 @@ export interface SaveFile {
   format: string;
   savedAt: string;
   design: Design;
+  /**
+   * 只有自动存档草稿会写：这份半成品属于哪一关。存档位是用户的设计，导出文件是给
+   * 别人的，都不该绑住本工具的关卡；唯独草稿是「回来接着做」，丢了这一条就会
+   * 带着关卡的半成品开机进沙盒（面板还说「沙盒模式没有判题」）。
+   */
+  levelId?: string;
 }
 
-export function serialize(design: Design): string {
+export function serialize(design: Design, levelId?: string | null): string {
   const file: SaveFile = { format: FORMAT, savedAt: new Date().toISOString(), design };
+  if (levelId) file.levelId = levelId;
   return JSON.stringify(file, null, 1);
 }
 
@@ -239,6 +246,16 @@ export function slotSavedAt(text: string): string {
   try {
     const raw = JSON.parse(text) as Partial<SaveFile>;
     return typeof raw.savedAt === "string" ? raw.savedAt : "";
+  } catch {
+    return "";
+  }
+}
+
+/** 只取草稿所属关卡；老草稿、沙盒草稿、解析失败都是空串 */
+export function slotLevelId(text: string): string {
+  try {
+    const raw = JSON.parse(text) as Partial<SaveFile>;
+    return typeof raw.levelId === "string" ? raw.levelId : "";
   } catch {
     return "";
   }
