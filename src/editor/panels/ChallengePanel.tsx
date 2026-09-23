@@ -1,22 +1,23 @@
 import { Button, Modal, Progress, Tag, Tooltip } from "antd";
-import { useEffect, useState } from "react";
-import { LEVELS, STORAGE_LEVELS, FAST_LEVELS, TIERS, levelById, parCost } from "../../challenges/levels.ts";
-import type { Level } from "../../challenges/levels.ts";
+import { useState } from "react";
+import {
+  FAST_LEVELS,
+  LEVELS,
+  STORAGE_LEVELS,
+  TIERS,
+  levelById,
+  parCost,
+} from "../../challenges/levels.ts";
 import { catchupLevels, missingPrereqs } from "../../challenges/prereq.ts";
 import { BADGES, passed, scoreOf, tierDone } from "../../challenges/progress.ts";
-/* antd 的 Progress 组件占了这个名字，进度类型换个名再引 */
-import type { Progress as ProgressState } from "../../challenges/progress.ts";
-import type { Badge } from "../../challenges/progress.ts";
+import type { Progress as ProgressState, Badge } from "../../challenges/progress.ts";
 import { settleState } from "../../core/sim.ts";
 import { sortDiags } from "../../core/netlist.ts";
 import { designCost, useEditor } from "../store.ts";
 
 /* ------------------------------------------------------------------ *
- * 关卡面板：五层进度 + 任务说明 + 判题结果
- *
- * 推进按先修图（doc 03 §8）：世界顺序只是推荐，缺先修不硬锁，而是先把缺口摆出来，
- * 给「去补实验」和「直接进入」两条路 —— 直接进去照样判题、照样得勋章，
- * 但前置关的通关记录不会因为跳关补上。
+ * 关卡面板：根据 store.book 显示当前书的世界与关卡。
+ * 书架入口已迁到主页（/），本面板只负责「书内关卡视图」。
  * ------------------------------------------------------------------ */
 
 /** 跳关确认里要摆的事实 */
@@ -24,10 +25,6 @@ interface GapAsk {
   id: string;
   missing: string[];
   catchup: string[];
-}
-
-function scoreOfBookLevels(progress: ProgressState, list: Level[]): number {
-  return list.filter((l) => passed(progress, l.id)).length;
 }
 
 const levelName = (id: string) => levelById(id)?.name ?? id;
@@ -38,19 +35,12 @@ export default function ChallengePanel() {
   const result = useEditor((s) => s.result);
   const mode = useEditor((s) => s.mode);
   const design = useEditor((s) => s.design);
+  const book = useEditor((s) => s.book);
+  const setBook = useEditor((s) => s.setBook);
   const st = useEditor.getState;
   const level = levelById(levelId ?? "");
   const score = scoreOf(progress);
   const [gapAsk, setGapAsk] = useState<GapAsk | null>(null);
-  /** 当前翻开的书：null = 在首页书架；logic/memory/fast = 进入该书 */
-  const [book, setBook] = useState<null | "logic" | "memory" | "fast">(null);
-  /** doc 02 §5.3：顶栏「书架」按钮触发回到首页 */
-  useEffect(() => {
-    (window as { __resetBookTo?: () => void }).__resetBookTo = () => setBook(null);
-    return () => {
-      delete (window as { __resetBookTo?: () => void }).__resetBookTo;
-    };
-  }, []);
   /** doc 02 §5.2：振荡与预算用尽必须说不同的话 */
   const settle = result ? settleState(result.settleOutcome) : null;
 
@@ -63,134 +53,120 @@ export default function ChallengePanel() {
     setGapAsk({ id, missing, catchup: catchupLevels(p, id) });
   };
 
-  if (book === null) {
-    /* 主页：3 张书卡，别的一概不放 */
-    const books = [
-      {
-        key: "logic" as const,
-        glyph: "⛁",
-        title: "CPU 书",
-        sub: "《从门到一台 Z16》",
-        blurb: "31 关 · 5 个世界（逻辑门→组合→时序→造 CPU→存储体系）",
-        list: LEVELS,
-        theme: "theme-cpu",
-      },
-      {
-        key: "memory" as const,
-        glyph: "☰",
-        title: "存储书",
-        sub: "《囚禁电荷》",
-        blurb: "18 关 · 6 个世界（DRAM/Flash/FTL/磁盘金字塔与掉电）",
-        list: STORAGE_LEVELS,
-        theme: "theme-mem",
-      },
-      {
-        key: "fast" as const,
-        glyph: "⇉",
-        title: "优化书",
-        sub: "《流水线与之后的一切》",
-        blurb: "8 关 · 2 个世界（切长路径 / 控制冒险）",
-        list: FAST_LEVELS,
-        theme: "theme-fast",
-      },
-    ];
-    return (
-      <div className="shelf-body">
-        <div className="shelf">
-          {books.map((b) => {
-            const done = scoreOfBookLevels(progress, b.list);
-            const total = b.list.length;
-            const pct = Math.round((done / total) * 100);
-            const finished = done === total;
-            return (
-              <button
-                key={b.key}
-                className={"book-cover " + b.theme + (finished ? " done" : "")}
-                onClick={() => setBook(b.key)}
-              >
-                <span className="cover-glyph">{b.glyph}</span>
-                <span className="cover-title">{b.title}</span>
-                <span className="cover-sub">{b.sub}</span>
-                <span className="cover-blurb">{b.blurb}</span>
-                <div className="cover-progress">
-                  <Progress
-                    percent={pct}
-                    size="small"
-                    format={() => `${done}/${total}`}
-                    status={finished ? "success" : "active"}
-                  />
-                </div>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-    );
-  }
+  /* 三本书的视图互斥：
+     - 没选书（直接刷 /lesson 进来）：显示「全部」概览
+     - 选了某一本：只展示该本 */
+  const showLogic = book === null || book === "logic";
+  const showMemory = book === null || book === "memory";
+  const showFast = book === null || book === "fast";
+  const headTitle =
+    book === "logic"
+      ? "CPU 书"
+      : book === "memory"
+        ? "存储书"
+        : book === "fast"
+          ? "优化书"
+          : "全部关卡";
 
-  /* 进入某书：顶部返回按钮 + 关卡列表 */
-  const bookTitle = book === "logic" ? "CPU 书" : book === "memory" ? "存储书" : "优化书";
   return (
     <div className="panel-body">
-      <button className="book-back" onClick={() => setBook(null)}>
-        ← 返回书架
-      </button>
+      <div className="book-tabs">
+        <button
+          className={"book-tab" + (book === null ? " on" : "")}
+          onClick={() => setBook(null)}
+          aria-pressed={book === null}
+        >
+          全部
+        </button>
+        <button
+          className={"book-tab theme-cpu" + (book === "logic" ? " on" : "")}
+          onClick={() => setBook("logic")}
+          aria-pressed={book === "logic"}
+        >
+          CPU 书
+        </button>
+        <button
+          className={"book-tab theme-mem" + (book === "memory" ? " on" : "")}
+          onClick={() => setBook("memory")}
+          aria-pressed={book === "memory"}
+        >
+          存储书
+        </button>
+        <button
+          className={"book-tab theme-fast" + (book === "fast" ? " on" : "")}
+          onClick={() => setBook("fast")}
+          aria-pressed={book === "fast"}
+        >
+          优化书
+        </button>
+      </div>
       <div className="head">
-        <span className="title">{bookTitle}</span>
+        <span className="title">{headTitle}</span>
         <span className="tag">
-          {scoreOfBookLevels(progress, book === "logic" ? LEVELS : book === "memory" ? STORAGE_LEVELS : FAST_LEVELS)}/
-          {(book === "logic" ? LEVELS : book === "memory" ? STORAGE_LEVELS : FAST_LEVELS).length} 关
+          {score.levels}/{LEVELS.length + STORAGE_LEVELS.length + FAST_LEVELS.length} 关
         </span>
         <span className="tag">成就 {score.badges}/{BADGES.length}</span>
       </div>
 
-      <div className="level-list">
-        {(book === "logic") &&
-          TIERS.map((t) => {
-          const list = LEVELS.filter((l) => l.tier === t.tier);
-          const { ok, total } = tierDone(progress, t.tier);
-          return (
-            <section key={t.tier} className="tier">
-              <div className="tier-head">
-                <span>{t.name}</span>
-                <Tooltip title={t.blurb}>
-                  <Progress
-                    percent={Math.round((ok / total) * 100)}
-                    size="small"
-                    format={() => `${ok}/${total}`}
-                    status={ok === total ? "success" : "active"}
-                  />
-                </Tooltip>
-              </div>
-              <div className="tier-items">
-                {list.map((l) => {
-                  const missing = missingPrereqs(progress, l.id);
-                  const done = passed(progress, l.id);
-                  const rec = progress.done[l.id];
-                  return (
-                    <button
-                      key={l.id}
-                      className={"lv" + (l.id === levelId ? " on" : "") + (done ? " done" : "") + (missing.length ? " gap" : "")}
-                      onClick={() => openLevel(l.id, progress)}
-                      title={missing.length ? `还缺先修：${missing.map(levelName).join("、")}` : l.brief}
-                    >
-                      <span className="lv-no">{done ? "✓" : missing.length ? "!" : l.id.split("-")[0].toUpperCase()}</span>
-                      <span className="lv-name">{l.name}</span>
-                      {missing.length > 0 && <span className="lv-gap mono">先修 {missing.length}</span>}
-                      {rec?.pass && <span className="lv-cost mono">{rec.cost}</span>}
-                    </button>
-                  );
-                })}
-              </div>
-            </section>
-          );
-        })}
-      </div>
+      {showLogic && (
+        <div className="level-list">
+          {TIERS.map((t) => {
+            const list = LEVELS.filter((l) => l.tier === t.tier);
+            const { ok, total } = tierDone(progress, t.tier);
+            return (
+              <section key={t.tier} className="tier">
+                <div className="tier-head">
+                  <span>{t.name}</span>
+                  <Tooltip title={t.blurb}>
+                    <Progress
+                      percent={Math.round((ok / total) * 100)}
+                      size="small"
+                      format={() => `${ok}/${total}`}
+                      status={ok === total ? "success" : "active"}
+                    />
+                  </Tooltip>
+                </div>
+                <div className="tier-items">
+                  {list.map((l) => {
+                    const missing = missingPrereqs(progress, l.id);
+                    const done = passed(progress, l.id);
+                    const rec = progress.done[l.id];
+                    return (
+                      <button
+                        key={l.id}
+                        className={
+                          "lv" +
+                          (l.id === levelId ? " on" : "") +
+                          (done ? " done" : "") +
+                          (missing.length ? " gap" : "")
+                        }
+                        onClick={() => openLevel(l.id, progress)}
+                        title={
+                          missing.length
+                            ? `还缺先修：${missing.map(levelName).join("、")}`
+                            : l.brief
+                        }
+                      >
+                        <span className="lv-no">
+                          {done ? "✓" : missing.length ? "!" : l.id.split("-")[0].toUpperCase()}
+                        </span>
+                        <span className="lv-name">{l.name}</span>
+                        {missing.length > 0 && <span className="lv-gap mono">先修 {missing.length}</span>}
+                        {rec?.pass && <span className="lv-cost mono">{rec.cost}</span>}
+                      </button>
+                    );
+                  })}
+                </div>
+              </section>
+            );
+          })}
+        </div>
+      )}
 
-      {(book === "memory") && (
+      {showMemory && (
         <StorageSection progress={progress} levelId={levelId} onOpen={openLevel} />
       )}
-      {(book === "fast") && (
+      {showFast && (
         <FastSection progress={progress} levelId={levelId} onOpen={openLevel} />
       )}
 
@@ -258,8 +234,6 @@ export default function ChallengePanel() {
                   </li>
                 ))}
               </ul>
-              {/* 未驱动只是"按 0 读取"的事实，不能和阻断性错误共用红色样式，
-                  也不能把它排到前面挤掉真正的错误 */}
               {sortDiags(result.errors)
                 .slice(0, 5)
                 .map((e, i) => (
@@ -317,7 +291,7 @@ export default function ChallengePanel() {
   );
 }
 
-/** 存储书《囚禁电荷》：独立于 CPU 书 31 关的第二本书，先出预览节 */
+/** 存储书《囚禁电荷》：独立于 CPU 书 31 关的第二本书 */
 function StorageSection({
   progress,
   levelId,

@@ -1429,6 +1429,60 @@ input[type="range"]:focus-visible {
 }
 
 /* 书架主页：3 张大封面卡 */
+/* 书架主页：整页只剩 3 张书卡，不再叠编辑器 */
+.shelf-page {
+  min-height: 100vh;
+  background: radial-gradient(1200px 600px at 50% -200px, rgba(167, 139, 250, 0.12), transparent 70%),
+    linear-gradient(180deg, #0b0d14 0%, #07090f 100%);
+  color: var(--text);
+  padding: 64px 48px 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 48px;
+}
+.shelf-page-head {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 24px;
+  max-width: 1200px;
+  margin: 0 auto;
+  width: 100%;
+}
+.shelf-page-head .brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 600;
+}
+.shelf-page-head .brand .logo {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #8b5cf6 0%, #c4b5fd 100%);
+  color: #0b0d14;
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+}
+.shelf-page-head .brand-name {
+  font-size: 18px;
+  letter-spacing: 0.4px;
+}
+.shelf-page-head .brand-tag {
+  color: var(--dim);
+  font-size: 14px;
+}
+.shelf-page-head .total-progress {
+  color: var(--dim);
+  font-size: 13px;
+}
+.shelf-page-foot {
+  display: flex;
+  justify-content: center;
+  margin-top: 8px;
+}
+
 .shelf-body {
   display: flex;
   flex-direction: column;
@@ -1439,47 +1493,56 @@ input[type="range"]:focus-visible {
 }
 .shelf {
   display: grid;
-  grid-template-columns: 1fr;
-  gap: 12px;
+  grid-template-columns: repeat(3, minmax(260px, 1fr));
+  gap: 20px;
+  max-width: 1200px;
+  width: 100%;
+  margin: 0 auto;
+}
+@media (max-width: 900px) {
+  .shelf {
+    grid-template-columns: 1fr;
+  }
 }
 .book-cover {
   appearance: none;
   background: linear-gradient(160deg, #1a2030 0%, #131826 100%);
   border: 1px solid var(--edge);
-  border-radius: 10px;
-  padding: 14px 16px;
+  border-radius: 14px;
+  padding: 20px 22px;
   text-align: left;
   color: var(--text);
   cursor: pointer;
   display: grid;
   grid-template-columns: auto 1fr;
-  grid-template-rows: auto auto auto auto;
-  column-gap: 14px;
-  row-gap: 4px;
-  transition: transform 0.12s, border-color 0.12s, background 0.12s;
-  min-height: 96px;
+  grid-template-rows: auto auto auto auto auto;
+  column-gap: 16px;
+  row-gap: 6px;
+  transition: transform 0.12s, border-color 0.12s, background 0.12s, box-shadow 0.12s;
+  min-height: 200px;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.02), 0 8px 24px rgba(0, 0, 0, 0.4);
 }
 .book-cover:hover {
-  border-color: var(--accent);
-  transform: translateY(-1px);
+  transform: translateY(-2px);
+  box-shadow: 0 2px 0 rgba(255, 255, 255, 0.04), 0 16px 32px rgba(0, 0, 0, 0.55);
 }
 .book-cover.done {
   border-color: var(--ok);
 }
 .cover-glyph {
-  grid-row: 1 / span 4;
-  font-size: 32px;
+  grid-row: 1 / span 5;
+  font-size: 56px;
   align-self: center;
   color: var(--accent);
   line-height: 1;
 }
 .cover-title {
-  font-size: 15px;
-  font-weight: 600;
+  font-size: 17px;
+  font-weight: 700;
   align-self: end;
 }
 .cover-sub {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--dim);
   grid-column: 2;
 }
@@ -1487,11 +1550,48 @@ input[type="range"]:focus-visible {
   grid-column: 2;
   font-size: 12px;
   color: var(--dim);
-  line-height: 1.55;
+  line-height: 1.6;
 }
 .cover-progress {
   grid-column: 1 / span 2;
-  margin-top: 8px;
+  margin-top: 10px;
+}
+.cover-cta {
+  grid-column: 2;
+  font-size: 12px;
+  color: var(--accent);
+  margin-top: 4px;
+  opacity: 0.85;
+}
+
+/* 右侧栏头部：书架入口 + 当前书名 */
+.rail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 8px 4px;
+  border-bottom: 1px solid var(--edge);
+  margin-bottom: 4px;
+}
+.rail-title {
+  font-size: 12px;
+  color: var(--dim);
+}
+
+.btn.ghost {
+  background: transparent;
+  border: 1px solid var(--edge);
+  color: var(--text);
+}
+.btn.ghost:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+.btn.ghost.small {
+  font-size: 12px;
+  padding: 2px 10px;
+  border-radius: 6px;
+  cursor: pointer;
 }
 
 /* 书内返回按钮 */

@@ -57,6 +57,9 @@ interface Snapshot {
 
 export type PanelKey = "inspector" | "level" | "asm" | "cpu" | "probe" | "log" | "help" | "workshop";
 
+/** 当前翻开的书：null = 全部；进入 /lesson 之前由 ShelfPage 写入 */
+export type BookKey = "logic" | "memory" | "fast";
+
 export interface EditorState {
   design: Design;
   /** "root" 或子电路 def id */
@@ -95,6 +98,8 @@ export interface EditorState {
   /** 最近一次判题新拿到的成就 */
   earned: Badge[];
   panel: PanelKey;
+  /** 当前翻开的书（null = 全部），从书架主页写入 */
+  book: BookKey | null;
   asmSource: string;
   asmTarget: string;
   asmErrors: string[];
@@ -118,6 +123,7 @@ export interface EditorState {
   toGrid(px: number, py: number): Point;
 
   setPanel(p: PanelKey): void;
+  setBook(b: BookKey | null): void;
   setCamera(c: Partial<Camera>): void;
   setViewport(w: number, h: number): void;
   zoomBy(factor: number, anchor?: Point): void;
@@ -419,6 +425,7 @@ export const useEditor = create<EditorState>((set, get) => {
     progress: initialProgress,
     earned: [],
     panel: "level",
+    book: null,
     asmSource: assemblesSample("count"),
     asmTarget: "",
     asmErrors: [],
@@ -453,6 +460,9 @@ export const useEditor = create<EditorState>((set, get) => {
 
     setPanel(p) {
       set({ panel: p });
+    },
+    setBook(b) {
+      set({ book: b });
     },
     setCamera(c) {
       set((s) => ({ camera: { ...s.camera, ...c } }));

@@ -37,20 +37,7 @@ export default function Toolbar() {
   return (
     <header className="toolbar">
       <div className="tb-group">
-        <Tooltip title="返回书架（CPU/存储/优化）">
-        <button
-          className="tb-btn"
-          onClick={() => {
-            const s = st();
-            s.setPanel("level");
-            /* 通知 ChallengePanel 跳到「全部」视图——通过在 window 上挂个提示 */
-            (window as { __resetBookTo?: () => void }).__resetBookTo?.();
-          }}
-        >
-          书架
-        </button>
-      </Tooltip>
-      <Tooltip title="运行 / 暂停（空格）">
+        <Tooltip title="运行 / 暂停（空格）">
           <button className={"btn big" + (running ? " active" : "")} onClick={() => st().toggleRun()}>
             {running ? "⏸" : "▶"}
           </button>
