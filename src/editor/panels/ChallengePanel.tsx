@@ -1,6 +1,6 @@
 import { Button, Modal, Progress, Tag, Tooltip } from "antd";
 import { useState } from "react";
-import { LEVELS, STORAGE_LEVELS, TIERS, levelById, parCost } from "../../challenges/levels.ts";
+import { LEVELS, STORAGE_LEVELS, FAST_LEVELS, TIERS, levelById, parCost } from "../../challenges/levels.ts";
 import { catchupLevels, missingPrereqs } from "../../challenges/prereq.ts";
 import { BADGES, passed, scoreOf, tierDone } from "../../challenges/progress.ts";
 /* antd 的 Progress 组件占了这个名字，进度类型换个名再引 */
@@ -102,6 +102,7 @@ export default function ChallengePanel() {
       </div>
 
       <StorageSection progress={progress} levelId={levelId} onOpen={openLevel} />
+      <FastSection progress={progress} levelId={levelId} onOpen={openLevel} />
 
       <button className="btn wide" onClick={() => st().openSandbox()}>
         进入自由搭建沙盒
@@ -267,6 +268,64 @@ function StorageSection({
           </p>
           <div className="tier-items">
             {STORAGE_LEVELS.filter((l) => l.id.startsWith(w)).map((l) => {
+              const ok = passed(progress, l.id);
+              const rec = progress.done[l.id];
+              return (
+                <button
+                  key={l.id}
+                  className={"lv" + (l.id === levelId ? " on" : "") + (ok ? " done" : "")}
+                  onClick={() => onOpen(l.id, progress)}
+                  title={l.brief}
+                >
+                  <span className="lv-no">{ok ? "✓" : l.id.split("-")[0].toUpperCase()}</span>
+                  <span className="lv-name">{l.name}</span>
+                  {rec?.pass && <span className="lv-cost mono">{rec.cost}</span>}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+    </section>
+  );
+}
+
+function FastSection({
+  progress,
+  levelId,
+  onOpen,
+}: {
+  progress: ProgressState;
+  levelId: string | null;
+  onOpen: (id: string, p: ProgressState) => void;
+}) {
+  if (!FAST_LEVELS.length) return null;
+  const done = FAST_LEVELS.filter((l) => passed(progress, l.id)).length;
+  const worlds = [...new Set(FAST_LEVELS.map((l) => l.id.slice(0, 2).toUpperCase()))];
+  const worldNames: Record<string, string> = {
+    F1: "一 切长路径",
+    F2: "二 控制冒险",
+  };
+  return (
+    <section className="tier">
+      <div className="tier-head">
+        <span>优化书 · 流水线与之后的一切</span>
+        <Tooltip title="第三本书：把 CPU 性能账（延迟、冒险、预测）翻译成电路与拍数。两个世界，8 关全部上架。">
+          <Progress
+            percent={Math.round((done / FAST_LEVELS.length) * 100)}
+            size="small"
+            format={() => `${done}/${FAST_LEVELS.length}`}
+            status={done === FAST_LEVELS.length ? "success" : "active"}
+          />
+        </Tooltip>
+      </div>
+      {worlds.map((w) => (
+        <div key={w}>
+          <p className="teach">
+            世界 {w.replace(/^F/, "")} · {worldNames[w] ?? ""}
+          </p>
+          <div className="tier-items">
+            {FAST_LEVELS.filter((l) => l.id.startsWith(w)).map((l) => {
               const ok = passed(progress, l.id);
               const rec = progress.done[l.id];
               return (

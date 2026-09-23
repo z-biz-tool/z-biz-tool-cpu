@@ -7,7 +7,7 @@ import { baseDef } from "../src/core/registry.ts";
 import { sortDiags } from "../src/core/netlist.ts";
 import { RUN_STATE_TEXT, Simulator, settleState, worstSettle } from "../src/core/sim.ts";
 import { defOf, totalCost } from "../src/core/custom.ts";
-import { LEVELS, STORAGE_LEVELS, levelDesign, solutionDesign } from "../src/challenges/levels.ts";
+import { LEVELS, STORAGE_LEVELS, FAST_LEVELS, levelDesign, solutionDesign } from "../src/challenges/levels.ts";
 import { runLevelTests } from "../src/challenges/verify.ts";
 import { referenceCpu } from "../src/cpu/reference.ts";
 import { runProgram } from "../src/cpu/run.ts";
@@ -3593,7 +3593,21 @@ ok:
     check("PLATTER RD 给出磁头下方扇区", q === idx + 1, `q=${q} idx=${idx}`);
   }
 
-  /* 存储书全量通用环：每关参考解答全过 + 裸骨架不能白拿通关 */
+  /* 优化书全量通用环 */
+  {
+    check("FAST: 8 关优化书上架", FAST_LEVELS.length === 8, `len=${FAST_LEVELS.length}`);
+    for (const l of FAST_LEVELS) {
+      const sol = solutionDesign(l);
+      const judged = sol ? runLevelTests(l, sol) : undefined;
+      check(
+        `FAST书: ${l.id} 参考解答全过`,
+        !!judged && judged.pass,
+        JSON.stringify((judged?.outcomes ?? []).filter((o) => !o.pass).map((o) => o.name))
+      );
+      const naive = runLevelTests(l, levelDesign(l));
+      check(`FAST书: ${l.id} 裸骨架不能白拿通关`, !naive.pass, "");
+    }
+  }
   {
     check("BK: CPU 书仍是 31 关（存储书不进 LEVELS）", LEVELS.length === 31, `len=${LEVELS.length}`);
     check("BK: 存储书 18 关上架", STORAGE_LEVELS.length === 18, `len=${STORAGE_LEVELS.length}`);

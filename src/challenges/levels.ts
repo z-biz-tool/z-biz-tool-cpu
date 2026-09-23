@@ -2006,10 +2006,297 @@ const M6: Level[] = [
   },
 ];
 
+/* ---------------- 优化书 F1 切长路径（book-fast） ---------------- */
+
+const F1: Level[] = [
+  {
+    id: "f1-1-onetick",
+    tier: 6,
+    name: "一拍算完",
+    brief:
+      "把 A、B、C、D 四路 4 位数加在一起，1 拍之内出结果 R（5 位）。关卡只给你加法器——你自己串成链，每一拍的延迟都花在长长的进位链上。",
+    teach:
+      "单周期 CPU 的 ALU 就是这条进位链：从加法器一级一传到下一级。" +
+      "最长一路径上跨过 N 个加法器，就意味着时钟周期至少要装得下 N 级延迟——这就是 F1 串行的本质。",
+    available: ["input", "output", "clock", "add", "reg", "and", "or", "not", "const"],
+    skeleton: () =>
+      circuit([
+        clkSrc("CLK", 0, 0),
+        ioIn("A", 4, 4),
+        ioIn("B", 8, 4),
+        ioIn("C", 12, 4),
+        ioIn("D", 16, 4),
+        ioOut("R", 36, 0, 5),
+      ]),
+    tests: [
+      {
+        name: "1+2+3+4 = 10",
+        phases: [{ inputs: { A: 1, B: 2, C: 3, D: 4 }, steps: 1 }],
+        outputs: { R: 10 },
+      },
+      {
+        name: "全 9 撑满 5 位",
+        phases: [{ inputs: { A: 9, B: 9, C: 9, D: 9 }, steps: 1 }],
+        outputs: { R: 36 },
+      },
+    ],
+    hint: "三个加法器一路串下去：(A+B) → +C → +D → R。add 输出位宽看两端最大，自动取 5 位。",
+  },
+  {
+    id: "f1-2-cut",
+    tier: 6,
+    name: "切长路径",
+    brief:
+      "同样的加法链，现在中间插寄存器：第 1 拍进去前两个，第 2 拍加第三个，第 3 拍加第四个——R 在第 3 拍才稳定。",
+    teach:
+      "插寄存器（pipeline register）把一条长路径切成多段：每段延迟变短，时钟频率可以拉高，代价是多拍延迟。流水线的全部故事从这里开始。",
+    available: ["input", "output", "clock", "add", "reg", "and", "or", "not", "const"],
+    skeleton: () =>
+      circuit([
+        clkSrc("CLK", 0, 0),
+        ioIn("A", 4, 4),
+        ioIn("B", 8, 4),
+        ioIn("C", 12, 4),
+        ioIn("D", 16, 4),
+        ioOut("R", 44, 0, 5),
+      ]),
+    tests: [
+      {
+        name: "1+2+3+4 = 10 现在要等 3 拍",
+        phases: [
+          { inputs: { A: 1, B: 2, C: 3, D: 4 }, steps: 1 },
+          { inputs: { A: 1, B: 2, C: 3, D: 4 }, steps: 2 },
+        ],
+        outputs: { R: 10 },
+      },
+    ],
+    hint: "reg 摆在第二与第三个加法器之间：(A+B) 直接出；该 reg 的 Q 接第三级 add，reg.d = (A+B)。reg.clk 接 CLK。",
+  },
+  {
+    id: "f1-3-throughput",
+    tier: 6,
+    name: "吞吐换延迟",
+    brief:
+      "流水线以延迟换吞吐：单组输入要等 3 拍，但接下来每拍都能喂新数据，3 拍后开始每个时钟周期吐一条结果。连续喂 3 组，看输出节奏。",
+    teach:
+      "流水线不是单条指令变快了，而是当多组输入排队时，单位时间完成的指令数变多。" +
+      "单条延迟 3 拍，吞吐 = 每拍 1 条——对比单周期版（每条 1 拍、延迟 1 拍、吞吐也是每拍 1 条）。这里流水线的价值不在延迟而在同一硬件被复用。",
+    available: ["input", "output", "clock", "add", "reg", "and", "or", "not", "const"],
+    skeleton: () =>
+      circuit([
+        clkSrc("CLK", 0, 0),
+        ioIn("A", 4, 4),
+        ioIn("B", 8, 4),
+        ioIn("C", 12, 4),
+        ioIn("D", 16, 4),
+        ioOut("R", 44, 0, 5),
+      ]),
+    tests: [
+      {
+        name: "连喂三组，结果依次出现在第 3、4、5 拍",
+        phases: [
+          { inputs: { A: 1, B: 1, C: 1, D: 1 }, steps: 1 },
+          { inputs: { A: 2, B: 2, C: 2, D: 2 }, steps: 1 },
+          { inputs: { A: 3, B: 3, C: 3, D: 3 }, steps: 3 },
+        ],
+        outputs: { R: 12 },
+      },
+    ],
+    hint: "同 f1-2 的电路；本关不用改电路——只测多组输入下的行为：第 3、4、5 拍 R 依次为 4、8、12（最后一拍是第 3 组的 12）。",
+  },
+  {
+    id: "f1-4-bypass",
+    tier: 6,
+    name: "旁路与寄存器",
+    brief:
+      "A、B 都 4 位，加法器把两者相加。SEL=1 时结果旁路直通输出；SEL=0 时结果走寄存器后下一拍才出。",
+    teach:
+      "旁路是给结果两条出路：要立即看到就旁路（0 拍），要稳住就过 reg（1 拍）。" +
+      "一条 wire 上需要不同延迟的不同消费者时，旁路与寄存器两路并开——流水线里转发（forwarding）就是这个动作的延伸。",
+    available: ["input", "output", "clock", "add", "reg", "mux", "and", "or", "not", "const"],
+    skeleton: () =>
+      circuit([
+        clkSrc("CLK", 0, 0),
+        ioIn("A", 4, 4),
+        ioIn("B", 8, 4),
+        ioIn("SEL", 12, 1),
+        ioOut("R", 36, 0, 5),
+      ]),
+    tests: [
+      {
+        name: "旁路：SEL=1 立即出 A+B",
+        phases: [{ inputs: { A: 5, B: 3, SEL: 1 }, steps: 1 }],
+        outputs: { R: 8 },
+      },
+      {
+        name: "reg：先 SEL=1 写入，再 SEL=0 拿出",
+        phases: [
+          { inputs: { A: 5, B: 3, SEL: 1 }, steps: 1 },
+          { inputs: { A: 5, B: 3, SEL: 0 }, steps: 1 },
+        ],
+        outputs: { R: 8 },
+      },
+    ],
+    hint: "add(A, B) 一路接 reg.d、另一路给 mux；mux(sel=SEL, i0=reg.q, i1=add.sum) → R。",
+  },
+];
+
+/* ---------------- 优化书 F2 控制冒险（book-fast） ---------------- */
+
+const F2: Level[] = [
+  {
+    id: "f2-1-branch",
+    tier: 6,
+    name: "分支的代价",
+    brief:
+      "一个简单的分支器：输入 PC(3) 与 TAKEN(1)，输出 NEXT_PC(3)。规则是 TAKEN=1 时跳到 PC=2（固定目标），否则 PC+1。3 拍 3 个不同 PC 进来，看 NEXT_PC 是否跟得上。",
+    teach:
+      "条件分支的电路本质：多路选择器。看起来 1 拍就够——但 CPU 是流水线取指的：分支结果出来之前下一条指令已经被取进来了，那是另一笔延迟账。",
+    available: ["input", "output", "clock", "add", "reg", "mux", "and", "or", "not", "const"],
+    skeleton: () =>
+      circuit([
+        clkSrc("CLK", 0, 0),
+        ioIn("PC", 4, 3),
+        ioIn("TAKEN", 8, 1),
+        ioOut("NEXT", 24, 0, 3),
+      ]),
+    tests: [
+      {
+        name: "PC=3 不跳：NEXT=4",
+        phases: [{ inputs: { PC: 3, TAKEN: 0 }, steps: 1 }],
+        outputs: { NEXT: 4 },
+      },
+      {
+        name: "PC=3 跳：NEXT=2",
+        phases: [{ inputs: { PC: 3, TAKEN: 1 }, steps: 1 }],
+        outputs: { NEXT: 2 },
+      },
+    ],
+    hint: "mux(sel=TAKEN, i0=PC+1, i1=const 2) → NEXT。add(PC, 1) 给 PC+1。",
+  },
+  {
+    id: "f2-2-alwaystaken",
+    tier: 6,
+    name: "静态预测：总跳",
+    brief:
+      "把分支预测器做成常量 1：永远预测跳过去。一个循环反复跳，每次都准——再给一个『不跳』的尾巴，看预测错了几拍。",
+    teach:
+      "静态预测『总跳』对一个 back-edge 永远准，但对 forward-edge 错误率为 100%。最朴素的预测也是预测：它对一半程序就够了。",
+    available: ["input", "output", "clock", "add", "xor", "reg", "mux", "and", "or", "not", "const"],
+    skeleton: () =>
+      circuit([
+        clkSrc("CLK", 0, 0),
+        ioIn("PC", 4, 3),
+        ioIn("TAKEN", 8, 1),
+        ioOut("NEXT", 24, 0, 3),
+        ioOut("MISPRED", 24, 4, 1),
+      ]),
+    tests: [
+      {
+        name: "back-edge 命中：MISPRED=0",
+        phases: [{ inputs: { PC: 0, TAKEN: 1 }, steps: 1 }],
+        outputs: { NEXT: 2, MISPRED: 0 },
+      },
+      {
+        name: "forward-edge 落空：MISPRED=1",
+        phases: [{ inputs: { PC: 0, TAKEN: 0 }, steps: 1 }],
+        outputs: { NEXT: 1, MISPRED: 1 },
+      },
+    ],
+    hint: "MISPRED = (预测跳) XOR TAKEN；预测跳用 const 1。NEXT 跟 f2-1 同款 mux。",
+  },
+  {
+    id: "f2-3-bimodal",
+    tier: 6,
+    name: "2-bit 饱和计数",
+    brief:
+      "2-bit 饱和计数器：状态 0/1 预测『不跳』，状态 2/3 预测『跳』。每次实际结果更新：taken→+1，not taken→-1（边界钳住）。给一段反复跳转后又直走的程序，看预测命中率。",
+    teach:
+      "2-bit 饱和计数是 Smith 1981 的方案：一次错不立刻反转预测，要连错两次。一个 4 状态小格，比『总跳』少一半 misprediction，代价是 4 状态机。",
+    available: ["input", "output", "clock", "reg", "mux", "add", "sub", "cmp", "and", "or", "not", "const"],
+    skeleton: () =>
+      circuit([
+        clkSrc("CLK", 0, 0),
+        ioIn("TAKEN", 4, 1),
+        ioIn("RST", 8, 1),
+        ioOut("STATE", 24, 0, 2),
+        ioOut("PRED", 28, 0, 1),
+      ]),
+    tests: [
+      {
+        name: "连跳四次：STATE 封顶在 3",
+        phases: [
+          { inputs: { TAKEN: 1, RST: 1 }, steps: 1 },
+          { inputs: { TAKEN: 1, RST: 0 }, steps: 1 },
+          { inputs: { TAKEN: 1, RST: 0 }, steps: 1 },
+          { inputs: { TAKEN: 1, RST: 0 }, steps: 1 },
+        ],
+        outputs: { STATE: 3, PRED: 1 },
+      },
+      {
+        name: "四次不跳：STATE 钉在 0",
+        phases: [
+          { inputs: { TAKEN: 0, RST: 1 }, steps: 1 },
+          { inputs: { TAKEN: 0, RST: 0 }, steps: 1 },
+          { inputs: { TAKEN: 0, RST: 0 }, steps: 1 },
+          { inputs: { TAKEN: 0, RST: 0 }, steps: 1 },
+        ],
+        outputs: { STATE: 0, PRED: 0 },
+      },
+    ],
+    hint: "STATE 是一个 2 位 reg。新值 = clamp(STATE + (TAKEN?+1:-1), 0, 3)。PRED = STATE ≥ 2。",
+  },
+  {
+    id: "f2-4-btb",
+    tier: 6,
+    name: "BTB 目标缓存",
+    brief:
+      "分支目标缓冲（BTB）：记住最近跳过的分支都跳去了哪里。预测跳时直接给出缓存的目标，避开不确定的额外花销。给一个循环和它的目标，看 BTB 命中。",
+    teach:
+      "BTB 把『跳到哪』也缓存起来：连地址带方向一起查。一个 4 入口直接映射 BTB 就足以撑住 95% 的真实程序跳转。",
+    available: ["input", "output", "clock", "ram", "mux", "reg", "add", "cmp", "and", "or", "not", "const"],
+    skeleton: () =>
+      circuit([
+        clkSrc("CLK", 0, 0),
+        ioIn("PC", 4, 3),
+        ioIn("TAKEN", 8, 1),
+        ioIn("TARGET", 12, 3),
+        ioIn("WE", 16, 1),
+        ioOut("HIT", 28, 0, 1),
+        ioOut("PRED_PC", 32, 0, 3),
+      ]),
+    tests: [
+      {
+        name: "写两条进 BTB，第二条命中",
+        phases: [
+          { inputs: { PC: 0, TARGET: 2, TAKEN: 1, WE: 1 }, steps: 1 },
+          { inputs: { PC: 1, TARGET: 3, TAKEN: 1, WE: 1 }, steps: 1 },
+          { inputs: { PC: 1, WE: 0 }, steps: 1 },
+        ],
+        outputs: { HIT: 1, PRED_PC: 3 },
+      },
+      {
+        name: "查未写过的 PC 不命中",
+        phases: [
+          { inputs: { PC: 2, WE: 0 }, steps: 1 },
+        ],
+        outputs: { HIT: 0, PRED_PC: 0 },
+      },
+    ],
+    hint: "ram(8x3, addr=PC, din=TARGET, wen=WE)。PRED_PC = ram.dout；HIT = (ram.dout != 0)。",
+  },
+];
+
+export const FAST_LEVELS: Level[] = [...F1, ...F2];
+
 export const STORAGE_LEVELS: Level[] = [...M1, ...M2, ...M3, ...M4, ...M5, ...M6];
 
 export function levelById(id: string): Level | undefined {
-  return LEVELS.find((l) => l.id === id) ?? STORAGE_LEVELS.find((l) => l.id === id);
+  return (
+    LEVELS.find((l) => l.id === id) ??
+    STORAGE_LEVELS.find((l) => l.id === id) ??
+    FAST_LEVELS.find((l) => l.id === id)
+  );
 }
 
 export function levelsByTier(tier: number): Level[] {

@@ -1259,4 +1259,174 @@ export const SOLUTIONS: Record<string, Fix> = {
       ["FS", "out", "DISK", "wen"],
     ]);
   }),
+  "f1-1-onetick": onRoot((b) => {
+    /* 一拍串联三加法器：A+B → +C → +D → R */
+    const ab = b.add("add", 22, 0, {});
+    const abc = b.add("add", 26, 0, {});
+    const abcd = b.add("add", 30, 0, {});
+    b.link([
+      ["A", "out", ab, "a"],
+      ["B", "out", ab, "b"],
+      [ab, "sum", abc, "a"],
+      ["C", "out", abc, "b"],
+      [abc, "sum", abcd, "a"],
+      ["D", "out", abcd, "b"],
+      [abcd, "sum", "R", "in"],
+    ]);
+  }),
+  "f1-2-cut": onRoot((b) => {
+    /* 加 reg 在第二/三级之间；load 始终 1 让 reg 每拍更新 */
+    const one = b.add("const", 18, 8, { value: 1 });
+    const ab = b.add("add", 22, 0, {});
+    const p = b.add("reg", 26, 0, { bitWidth: 5 });
+    const abc = b.add("add", 30, 0, {});
+    const abcd = b.add("add", 34, 0, {});
+    b.link([
+      [one, "out", p, "load"],
+      ["CLK", "out", p, "clk"],
+      [ab, "sum", p, "d"],
+      ["A", "out", ab, "a"],
+      ["B", "out", ab, "b"],
+      [p, "q", abc, "a"],
+      ["C", "out", abc, "b"],
+      [abc, "sum", abcd, "a"],
+      ["D", "out", abcd, "b"],
+      [abcd, "sum", "R", "in"],
+    ]);
+  }),
+  "f1-3-throughput": onRoot((b) => {
+    const one = b.add("const", 18, 8, { value: 1 });
+    const ab = b.add("add", 22, 0, {});
+    const p = b.add("reg", 26, 0, { bitWidth: 5 });
+    const abc = b.add("add", 30, 0, {});
+    const abcd = b.add("add", 34, 0, {});
+    b.link([
+      [one, "out", p, "load"],
+      ["CLK", "out", p, "clk"],
+      [ab, "sum", p, "d"],
+      ["A", "out", ab, "a"],
+      ["B", "out", ab, "b"],
+      [p, "q", abc, "a"],
+      ["C", "out", abc, "b"],
+      [abc, "sum", abcd, "a"],
+      ["D", "out", abcd, "b"],
+      [abcd, "sum", "R", "in"],
+    ]);
+  }),
+  "f1-4-bypass": onRoot((b) => {
+    /* add(A,B) 一路进 reg.d；mux 按 SEL 在 reg.q 与 add.sum 之间选 */
+    const one = b.add("const", 18, 8, { value: 1 });
+    const ab = b.add("add", 22, 0, {});
+    const p = b.add("reg", 26, 0, { bitWidth: 5 });
+    const mx = b.add("mux", 30, 0, { inputs: 2 });
+    b.link([
+      [one, "out", p, "load"],
+      ["CLK", "out", p, "clk"],
+      ["A", "out", ab, "a"],
+      ["B", "out", ab, "b"],
+      [ab, "sum", p, "d"],
+      ["SEL", "out", mx, "sel"],
+      [p, "q", mx, "i0"],
+      [ab, "sum", mx, "i1"],
+      [mx, "out", "R", "in"],
+    ]);
+  }),
+  "f2-1-branch": onRoot((b) => {
+    /* 1 给加法器，2 给分支目标——别混 */
+    const c1 = b.add("const", 14, 0, { bitWidth: 3, value: 1 });
+    const c2 = b.add("const", 14, 4, { bitWidth: 3, value: 2 });
+    const inc = b.add("add", 16, 4, {});
+    const mx = b.add("mux", 18, 0, { inputs: 2 });
+    b.link([
+      ["PC", "out", inc, "a"],
+      [c1, "out", inc, "b"],
+      [inc, "sum", mx, "i0"],
+      [c2, "out", mx, "i1"],
+      ["TAKEN", "out", mx, "sel"],
+      [mx, "out", "NEXT", "in"],
+    ]);
+  }),
+  "f2-2-alwaystaken": onRoot((b) => {
+    const c1 = b.add("const", 14, 0, { bitWidth: 3, value: 1 });
+    const c2 = b.add("const", 14, 4, { bitWidth: 3, value: 2 });
+    const inc = b.add("add", 16, 4, {});
+    const mx = b.add("mux", 18, 0, { inputs: 2 });
+    const pred = b.add("const", 14, 8, { value: 1 });
+    const xor = b.add("xor", 16, 8, {});
+    b.link([
+      ["PC", "out", inc, "a"],
+      [c1, "out", inc, "b"],
+      [inc, "sum", mx, "i0"],
+      [c2, "out", mx, "i1"],
+      ["TAKEN", "out", mx, "sel"],
+      [mx, "out", "NEXT", "in"],
+      [pred, "out", xor, "i0"],
+      ["TAKEN", "out", xor, "i1"],
+      [xor, "out", "MISPRED", "in"],
+    ]);
+  }),
+  "f2-3-bimodal": onRoot((b) => {
+    /* 2-bit 饱和计数：load 始终 1；RST=1 时 d=0，否则 d = TAKEN?clamped+1:clamped-1 */
+    const one = b.add("const", 24, 8, { value: 1 });
+    const one2 = b.add("const", 22, 4, { bitWidth: 2, value: 1 });
+    const zero = b.add("const", 24, 4, { bitWidth: 2 });
+    const top = b.add("const", 24, 12, { bitWidth: 2, value: 3 });
+    const st = b.add("reg", 18, 0, { bitWidth: 2 });
+    const rstMux = b.add("mux", 22, 0, { inputs: 2 });
+    const inc = b.add("add", 26, 0, {});
+    const dec = b.add("sub", 26, 4, {});
+    const incClamp = b.add("mux", 30, 0, { inputs: 2 });
+    const decClamp = b.add("mux", 30, 4, { inputs: 2 });
+    const updMux = b.add("mux", 34, 0, { inputs: 2 });
+    const isThree = b.add("cmp", 38, 0, {});
+    const isZero = b.add("cmp", 38, 4, {});
+    const hi = b.add("cmp", 38, 8, {});
+    b.link([
+      [one, "out", st, "load"],
+      ["CLK", "out", st, "clk"],
+      [updMux, "out", rstMux, "i0"],
+      [zero, "out", rstMux, "i1"],
+      ["RST", "out", rstMux, "sel"],
+      [st, "q", inc, "a"],
+      [one2, "out", inc, "b"],
+      [st, "q", dec, "a"],
+      [one2, "out", dec, "b"],
+      [inc, "sum", incClamp, "i0"],
+      [top, "out", incClamp, "i1"],
+      [st, "q", isThree, "a"],
+      [top, "out", isThree, "b"],
+      [isThree, "eq", incClamp, "sel"],
+      [dec, "diff", decClamp, "i1"],
+      [st, "q", decClamp, "i0"],
+      [st, "q", isZero, "a"],
+      [top, "out", isZero, "b"],
+      [isZero, "eq", decClamp, "sel"],
+      [decClamp, "out", updMux, "i0"],
+      [incClamp, "out", updMux, "i1"],
+      ["TAKEN", "out", updMux, "sel"],
+      [rstMux, "out", st, "d"],
+      [st, "q", "STATE", "in"],
+      [st, "q", hi, "a"],
+      [top, "out", hi, "b"],
+      [hi, "eq", "PRED", "in"],
+    ]);
+  }),
+  "f2-4-btb": onRoot((b) => {
+    /* 直接映射 BTB：HIT = mem[PC] ≠ 0（0 视为未写入） */
+    const btb = b.add("ram", 22, 0, { bitWidth: 3, addrBits: 3, data: "0 0 0 0 0 0 0 0" });
+    const z = b.add("const", 18, 8, { bitWidth: 3 });
+    const eq = b.add("cmp", 28, 4, {});
+    const nt = b.add("not", 32, 4, { inputs: 1 });
+    b.link([
+      ["CLK", "out", btb, "clk"],
+      ["PC", "out", btb, "addr"],
+      ["WE", "out", btb, "wen"],
+      ["TARGET", "out", btb, "din"],
+      [btb, "dout", "PRED_PC", "in"],
+      [btb, "dout", eq, "a"],
+      [z, "out", eq, "b"],
+      [eq, "eq", nt, "i0"],
+      [nt, "out", "HIT", "in"],
+    ]);
+  }),
 };
