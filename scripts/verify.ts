@@ -6,7 +6,7 @@ import { CircuitBuilder } from "../src/core/build.ts";
 import { baseDef } from "../src/core/registry.ts";
 import { sortDiags } from "../src/core/netlist.ts";
 import { RUN_STATE_TEXT, Simulator, settleState, worstSettle } from "../src/core/sim.ts";
-import { totalCost } from "../src/core/custom.ts";
+import { defOf, totalCost } from "../src/core/custom.ts";
 import { LEVELS, STORAGE_LEVELS, levelDesign, solutionDesign } from "../src/challenges/levels.ts";
 import { runLevelTests } from "../src/challenges/verify.ts";
 import { referenceCpu } from "../src/cpu/reference.ts";
@@ -1230,7 +1230,7 @@ ok:
 
   // IMP-14: 命中测试 + a11y
   const { buildHitIndex, hitTest, screenToGrid } = await import("../src/editor/hitIndex.ts");
-  const { buildA11y, neighbour, describeFocus, portStructure } = await import("../src/editor/a11y.ts");
+  const { buildA11y, neighbour, describeFocus, portStructure, endName } = await import("../src/editor/a11y.ts");
   const idx = buildHitIndex(cpu.design.root);
   const a11y = buildA11y(cpu.design.root, cpu.design);
   check("IMP-14: 命中索引覆盖根元件", idx.comps.length === cpu.design.root.comps.length);
@@ -1272,6 +1272,46 @@ ok:
   }
   const g = screenToGrid(0, 0, { x: 0, y: 0, zoom: 1 });
   check("IMP-14: 屏幕转 grid 一致", g.x === 0 && g.y === 0);
+
+  /* doc 02 §10：叫法只有一套。画布上没命名的元件顶着类型标题（属性面板的 chip 就是
+   * 那两个字），读屏也必须念类型标题 —— 浏览器实测过旧行为：放置一个未命名输入端后，
+   * 选区播报整句是「已选中 1 个元件：co0n2995us2」，那串 id 在屏幕上任何地方都找不到。 */
+  {
+    const b = new CircuitBuilder();
+    const iu = b.add("input", 0, 0);
+    const ou = b.add("output", 4, 0);
+    const gate = b.add("and", 2, 3);
+    b.link([[iu, "out", ou, "in"]]);
+    const uc = b.build();
+    const ud: Design = { name: "未命名", root: uc, defs: [] };
+    const um = buildA11y(uc, ud);
+    const labelOf = (id: string) => defOf(ud, uc.comps.find((c) => c.id === id)!.type, {})?.label ?? "";
+    check(
+      "A11Y: 未命名元件也有叫法，就是属性面板那块 chip 的文字",
+      um.comps.every((c) => c.label && c.label !== c.id && !c.label.includes(c.id)) &&
+        um.comps[0].label === labelOf(iu),
+      um.comps.map((c) => c.label).join("、"),
+    );
+    const us = portStructure(um);
+    check(
+      "A11Y: 缺线清单里不出现内部 id",
+      us.openPorts.length > 0 && us.openPorts.every((p) => uc.comps.every((c) => !p.text.includes(c.id))),
+      us.openPorts.map((p) => p.text).join("｜"),
+    );
+    check(
+      "A11Y: 端口清单与走位说明对同一个元件说法一致",
+      us.openPorts.every((p) => p.text.startsWith(um.comps.find((c) => c.id === p.comp)!.label)),
+    );
+    const wireHit = describeFocus(um, { type: "wire", wire: { id: uc.wires[0].id }, dist: 0 });
+    check(
+      "A11Y: 走到一根连线上报的是两端叫法，不是两端 id",
+      wireHit.includes("连线") && wireHit.includes(`${labelOf(iu)}.out`) && !uc.comps.some((c) => wireHit.includes(c.id)),
+      wireHit,
+    );
+    const pinHit = describeFocus(um, { type: "pin", pin: { comp: gate, pin: "i0" }, dist: 0 });
+    check("A11Y: 走到引脚上同样报叫法", pinHit.startsWith(labelOf(gate)) && !pinHit.includes(gate), pinHit);
+    check("A11Y: endName 认得带点分的引用，也只换名字", endName(`${iu}.out`, us.labels) === `${labelOf(iu)}.out`);
+  }
 
   /* doc 02 §10：Canvas 的可访问同伴视图。位图上的总线、缺线必须能被念出来，
    * 而且念到的位宽要和画布一致——早先 "auto" 一律记成 1 位，4 位总线被念成 1 位。 */
@@ -1455,7 +1495,14 @@ ok:
       const r = nextAnnouncement(f, seen);
       return [r ? r.say : "", r ? r.seen : seen] as [string, ReturnType<typeof factsKey>];
     };
-    const base: F = { run: "paused", save: "saved", judge: null, selection: { comps: [], wires: [] }, labels: new Map() };
+    const base: F = {
+      run: "paused",
+      save: "saved",
+      judge: null,
+      selection: { comps: [], wires: [] },
+      wire: { pending: null, links: [] },
+      labels: new Map(),
+    };
     const seen0 = factsKey(base);
     check("AN: 状态没变就一句都不播（不打断读屏）", nextAnnouncement(base, seen0) === null);
     check("AN: 保存中间态 pending/saving 不进播报", (() => {
@@ -1499,6 +1546,53 @@ ok:
     check("AN: 清空选区也要播报", /未选中/.test(speak({ ...base, selection: { comps: [], wires: [] } }, factsKey(sel))), speak({ ...base }, factsKey(sel)));
     /* 拖动/改名只动坐标与标签，选区集合没变：不能每帧念一遍"已选中" */
     check("AN: 只改名字不改选区，不重复播报", speak({ ...sel, labels: new Map([["c1", "A 改名"], ["c2", "进位链"]]) }, factsKey(sel)) === "");
+
+    /* doc 07 §7：连线也要有下文。起点挂起 / 落一根线 / 断一根线 / 只取消，
+     * 四种走法都得从同一条通道里说出"现在到哪一步了"，而且念的是画布上的名字。 */
+    const named: F = { ...base, labels: new Map([["c1", "A"], ["c2", "进位链"]]) };
+    const seenNamed = factsKey(named);
+    const [startSay, seenStart] = step({ ...named, wire: { pending: "c1.out", links: [] } }, seenNamed);
+    check(
+      "AN: 挂起点要说出起点是谁、下一步做什么、怎么反悔",
+      /连线起点已选 A\.out/.test(startSay) && /再点一个端口/.test(startSay) && /Esc/.test(startSay),
+      startSay,
+    );
+    const [landSay, seenLand] = step({ ...named, wire: { pending: null, links: [{ from: "c1.out", to: "c2.i0" }] } }, seenStart);
+    check("AN: 一根线落地说的是「接好了」，不是「已取消」", /已接好一根线：A\.out → 进位链\.i0/.test(landSay) && !/取消/.test(landSay), landSay);
+    check("AN: 连线播报里不许出现内部 id", !/\bc1\b|\bc2\b/.test(landSay), landSay);
+    const [dropSay] = step({ ...named, wire: { pending: null, links: [] } }, seenLand);
+    check("AN: 断一根线要念出来并带上两端", /已断开一根线：A\.out → 进位链\.i0/.test(dropSay), dropSay);
+    const [cancelSay] = step(named, seenStart);
+    check("AN: 只清掉起点要说清「没有新线接上」", /连线已取消/.test(cancelSay) && /没有新线接上/.test(cancelSay), cancelSay);
+    /* 一次删掉一整段电路：逐根念会把读屏淹掉，这种情况只报数量 */
+    const seenMany = factsKey({
+      ...named,
+      wire: { pending: null, links: [{ from: "c1.out", to: "c2.i0" }, { from: "c1.out", to: "c2.i1" }, { from: "c2.out", to: "c1.i0" }] },
+    });
+    check("AN: 一次断多根线只报数量", /已断开 3 根线/.test(speak(named, seenMany)), speak(named, seenMany));
+    /* 起点挂在那里、元件随后被改名：键位没变，不该再念一遍连线 */
+    check(
+      "AN: 只改起点所在元件的名字，不重复播报连线",
+      speak({ ...named, wire: { pending: "c1.out", links: [] }, labels: new Map([["c1", "A 改名"], ["c2", "进位链"]]) }, seenStart) === "",
+    );
+
+    /* 一次只播一句：判题 > 保存 > 运行 > 连线 > 选区。删一段电路会同时改动连线
+     * 与选区，先说断了几根线，选区那句留到下一轮补上。 */
+    const seenCut = factsKey({
+      ...named,
+      selection: { comps: ["c1", "c2"], wires: [] },
+      wire: { pending: null, links: [{ from: "c1.out", to: "c2.i0" }] },
+    });
+    const afterCut: F = { ...named, selection: { comps: ["c1"], wires: [] }, wire: { pending: null, links: [] } };
+    const [cutSay, seenAfterCut] = step(afterCut, seenCut);
+    check("AN: 断线优先于选区变化，且一次只播一句", /已断开一根线/.test(cutSay) && !/已选中/.test(cutSay), cutSay);
+    const [cutSelSay] = step(afterCut, seenAfterCut);
+    check("AN: 让路的选区那句在下一轮补上", /已选中 1 个元件：A/.test(cutSelSay), cutSelSay);
+    const judgeFirst: F = { ...afterCut, judge: { pass: false, ok: 1, total: 2, levelId: "t1-and" } };
+    const judgeVsWire = speak(judgeFirst, seenCut);
+    check("AN: 判题压在连线之前", /判题/.test(judgeVsWire) && !/断开/.test(judgeVsWire), judgeVsWire);
+    const [runVsWire] = step({ ...named, run: "running", wire: { pending: "c1.out", links: [] } }, seenNamed);
+    check("AN: 运行状态压在连线之前，连线留到下一轮", runVsWire === "运行中", runVsWire);
   }
 
   /* doc 02 §5.2: 运行状态语言 —— HALTED / NON_CONVERGENT / RESOURCE_LIMIT 互不冒充 */
@@ -2406,7 +2500,12 @@ ok:
      * 键盘用户就又只能拿鼠标去点几像素大的引脚了。 */
     check("GATE: 未连接端口是按钮，按下去交给出线工具而不是只选中", /className="a11y-port"[\s\S]{0,260}startWire\(\{ comp: p\.comp, pin: p\.pin \}\)/.test(vc));
     check("GATE: 挂着的线头在清单上标得出来（aria-pressed 跟着 pendingWire 走）", /aria-pressed=\{!!pendingWire && pendingWire\.comp === p\.comp && pendingWire\.pin === p\.pin\}/.test(vc));
-    check("GATE: 有了起点就说下一步做什么，并给一条看得见、按得到的反悔路", /role="status" aria-live="polite" className="a11y-hint">\s*连线起点已选/.test(vc) && !/<button[^>]*onClick=\{cancelWire\}[^>]*hidden/.test(vc) && /onClick=\{cancelWire\}>[\s\S]{0,40}取消连线/.test(vc));
+    check("GATE: 有了起点就说下一步做什么，并给一条看得见、按得到的反悔路", /className="a11y-hint">\s*连线起点已选/.test(vc) && !/<button[^>]*onClick=\{cancelWire\}[^>]*hidden/.test(vc) && /onClick=\{cancelWire\}>[\s\S]{0,40}取消连线/.test(vc));
+    check(
+      "GATE: 这句话只给看得见的人，读屏那一份只有 #a11y-live 一条通道（挂两处就念两遍）",
+      (vc.match(/role="status"|aria-live/g) ?? []).length === 2 && /<p role="status" aria-live="polite">[\s\S]{0,40}readout/.test(vc),
+      `${(vc.match(/role="status"|aria-live/g) ?? []).length} 处 live 语义`,
+    );
     check("GATE: 端口清单的用法说明真挂在 DOM 上", /id="a11y-port-hint"/.test(vc) && /aria-describedby="a11y-port-hint"/.test(vc));
     check("GATE: 端口按钮有 24px 命中高度，文字色是量得到的实色", /\.a11y-ports button\.a11y-port\s*\{[^}]*min-height: 24px[\s\S]{0,200}color: var\(--text\)/.test(css));
     check("GATE: 缺线那一行带得出落点，不再只是一句文案", /openPorts\.push\(\{[\s\S]{0,180}text:/.test(a11yCode));
@@ -2453,6 +2552,14 @@ ok:
       /<section className="a11y-only"[^>]*>/.test(a11ySrc) && (a11ySrc.match(/data-keys/g) ?? []).length === 1,
     );
     check("GATE: 手册把两块清单的按键域写进说明", /元件清单或波形清单里时同样不生效/.test(watch));
+    /* 叫法只能有一处定义：可访问清单、连线播报、属性面板 chip 说的是同一个元件，
+     * 各写一套兜底就会出现"清单里叫输入、播报里叫一串 id"。 */
+    const insp = strip("../src/editor/Inspector.tsx");
+    const namingSrc = strip("../src/editor/a11y.ts");
+    check(
+      "GATE: 属性面板与可访问视图共用同一套叫法，不再各写一份兜底",
+      /compLabel\(design, c\)/.test(insp) && !/\?\.label \|\| c\.type/.test(insp) && /export function compLabel/.test(namingSrc),
+    );
   }
 
   /* GATE: 播报层的接线 —— 逻辑可以单测，但"挂在页面哪、用什么 live 语义"
@@ -2463,10 +2570,39 @@ ok:
     const live = readFileSync(new URL("../src/editor/A11yAnnouncer.tsx", import.meta.url).pathname, "utf8");
     const help = readFileSync(new URL("../src/editor/panels/WatchPanels.tsx", import.meta.url).pathname, "utf8");
     const canvas = readFileSync(new URL("../src/editor/Canvas.tsx", import.meta.url).pathname, "utf8");
+    /* 门禁只认真实代码：注释里复述一遍函数名就能骗过正则（本项目踩过），先剥块注释。 */
+    const strip = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, "");
+    const stripLive = strip(live);
+    const announceCode = strip(readFileSync(new URL("../src/editor/announce.ts", import.meta.url).pathname, "utf8"));
     check("GATE: 播报区挂在应用根部", /import \{ A11yAnnouncer \}/.test(app) && /<A11yAnnouncer \/>/.test(app));
     check("GATE: 播报用 polite + atomic，不用 assertive", /role="status"/.test(live) && /aria-live="polite"/.test(live) && /aria-atomic="true"/.test(live) && !/assertive/.test(live));
     check("GATE: 开机第一眼不播（先把当前状态当基线）", /if \(!seen\.current\)/.test(live) && /factsKey\(facts\)/.test(live));
-    check("GATE: 组件只负责接线，文案规则在 announce.ts", !/判题通过|已选中/.test(live) && /nextAnnouncement\(facts, seen\.current\)/.test(live));
+    check("GATE: 组件只负责接线，文案规则在 announce.ts", !/判题通过|已选中/.test(stripLive) && /nextAnnouncement\(facts, seen\.current\)/.test(stripLive));
+    /* 连线这一路必须有进出的两端： Announcer 不喂 pendingWire，读屏按端口就什么也听不到；
+     * announce.ts 不排序，一句"接好了"会被每拍的选区播报盖掉。
+     * 检查范围收在 wire:{…} 这一段里 —— 组件里留一个没人用的 const pendingWire 也能
+     * 骗过"全文有这个标识符"这种门禁（变异测试踩过）。 */
+    const wireFact = stripLive.match(/wire: \{[\s\S]{0,220}?\n      \},/)?.[0] ?? "";
+    check(
+      "GATE: 连线事实喂进了播报通道（起点挂 pendingWire，线数挂 wires）",
+      /pending: pendingWire \?/.test(wireFact) && /pendingWire\.comp/.test(wireFact) && /pendingWire\.pin/.test(wireFact) && /links: wires\.map\(/.test(wireFact),
+      wireFact.trim().slice(0, 90),
+    );
+    check("GATE: 播报通道不每拍重建 a11y 模型", !/buildA11y|portStructure/.test(stripLive));
+    /* 位置按各分支实际返回的那句文案找：wireChanged 这类中间变量在分支之前就声明了，
+     * 拿它比顺序会漏掉"把连线整段挪到判题前面"这种改法。 */
+    const prio = ["say: judgeLine(f)", "say: saveLine(f)", "say: runLine(f)", "say: wireLine(f", "say: selLine(f)"].map(
+      (k) => announceCode.indexOf(k),
+    );
+    check(
+      "GATE: 播报优先级排成 判题 > 保存 > 运行 > 连线 > 选区",
+      prio.every((i) => i >= 0) && prio.every((i, n) => n === 0 || i > prio[n - 1]),
+      prio.join(" < "),
+    );
+    check("GATE: 连线播报走画布命名，不念内部 id", /=> endName\(ref, f\.labels\)/.test(announceCode));
+    check("GATE: 播报里的元件叫法与属性面板同一套规则", /compLabel\(design, c\)/.test(stripLive) && /labels: nameBook\.current/.test(stripLive));
+    check("GATE: 名字簿只增不减，断线那句才报得出刚被删掉的元件", /nameBook\.current\.set\(c\.id, compLabel\(design, c\)\)/.test(stripLive) && !/labels: new Map\(/.test(stripLive));
+    check("GATE: 落线与断线各自成句，不共用一句模糊话", /已接好一根线/.test(announceCode) && /已断开一根线/.test(announceCode) && /连线起点已选/.test(announceCode));
     check("GATE: 手册写清读屏与 Tab 行为", /键盘与读屏/.test(help) && /读取当前引脚值/.test(help));
     check("GATE: 画布自身可聚焦，快捷键与焦点环都可达", /tabIndex=\{0\}/.test(canvas));
   }

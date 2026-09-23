@@ -2,7 +2,7 @@ import { useMemo, useRef, useState } from "react";
 import { defOf } from "../core/custom.ts";
 import { sortDiags } from "../core/netlist.ts";
 import { bin, hex } from "../core/types.ts";
-import { buildA11y, describeFocus, neighbour, portStructure } from "./a11y.ts";
+import { buildA11y, describeFocus, endName, neighbour, portStructure } from "./a11y.ts";
 import { useEditor } from "./store.ts";
 
 /* ------------------------------------------------------------------ *
@@ -22,12 +22,6 @@ import { useEditor } from "./store.ts";
  * 选作连线起点（画布上那根橡皮筋跟着走），再按另一行就落一根线 —— 键盘用户
  * 不必再用鼠标去命中几像素大的引脚。
  * ------------------------------------------------------------------ */
-
-const endName = (ref: string, labels: Map<string, string>) => {
-  const i = ref.lastIndexOf(".");
-  const comp = ref.slice(0, i);
-  return `${labels.get(comp) ?? comp}.${ref.slice(i + 1)}`;
-};
 
 export function CanvasA11y() {
   const design = useEditor((s) => s.design);
@@ -218,11 +212,12 @@ export function CanvasA11y() {
       ) : (
         <p>{model.comps.length ? "所有端口都已连接。" : "画布上还没有元件。"}</p>
       )}
-      {/* 起点选上之后必须说清"接下来做什么"和"怎么反悔"：只把线头挂在画布上，
-          读屏用户听到的还是一句"未连接"，不知道有一根线正等着落地。 */}
+      {/* 起点选上之后要说清"接下来做什么"和"怎么反悔"，但这句话只给看得见的人：
+          说给读屏的那一份走 #a11y-live 那条唯一的播报通道（announce.ts 里
+          判题＞保存＞运行＞连线＞选区），这里再挂一个 live 区就把同一句念两遍。 */}
       {pendingWire && (
         <>
-          <p role="status" aria-live="polite" className="a11y-hint">
+          <p className="a11y-hint">
             连线起点已选 {endName(`${pendingWire.comp}.${pendingWire.pin}`, labels)}：再点一个端口完成连线，按 Esc
             或用下面的按钮放弃。
           </p>

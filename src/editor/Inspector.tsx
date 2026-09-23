@@ -4,6 +4,7 @@ import { customDefOf, defOf } from "../core/custom.ts";
 import { sortDiags } from "../core/netlist.ts";
 import { bin, hex, type CompInstance, type ParamSpec } from "../core/types.ts";
 import { componentInventory, emptyInventoryHint } from "./inventory.ts";
+import { compLabel } from "./a11y.ts";
 import { defCost, designCost, useEditor } from "./store.ts";
 
 /* ------------------------------------------------------------------ *
@@ -207,7 +208,7 @@ function MultiInfo({ comps }: { comps: CompInstance[] }) {
       <div className="chips">
         {comps.slice(0, 24).map((c) => (
           <span className="chip" key={c.id}>
-            {c.name || defOf(design, c.type, c.params)?.label || c.type}
+            {compLabel(design, c)}
           </span>
         ))}
       </div>

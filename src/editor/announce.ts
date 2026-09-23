@@ -1,12 +1,20 @@
 import { RUN_STATE_TEXT, type RunStateCode } from "../core/sim.ts";
 import { SAVE_STATE_TEXT, type SaveStateLabel } from "../project/saveState.ts";
+import { endName } from "./a11y.ts";
 
 /* ------------------------------------------------------------------ *
- * doc 02 §10：保存 / 运行 / 判题都是"动态信息"，读屏要能听到，但不能追着
- * 波形逐拍念。所以这里只认「状态枚举变了」这一件事：一次只播一句最重要的
- * 话（判题 > 保存 > 运行 > 选区），并且把 pending/saving 这种每敲一下就
+ * doc 02 §10：保存 / 运行 / 判题 / 连线都是"动态信息"，读屏要能听到，但不能
+ * 追着波形逐拍念。所以这里只认「状态枚举变了」这一件事：一次只播一句最重要的
+ * 话（判题 > 保存 > 运行 > 连线 > 选区），并且把 pending/saving 这种每敲一下就
  * 翻新的中间态静音掉。
  * ------------------------------------------------------------------ */
+
+/** 连线这一块要念的是"意图 + 结果"：有没有线头挂在画布上、这轮相比上轮多/少了哪根 */
+export interface WireFacts {
+  /** 挂起的起点，形如 "comp.pin"；没有起点时 null */
+  pending: string | null;
+  links: { from: string; to: string }[];
+}
 
 export interface AnnounceFacts {
   run: RunStateCode;
@@ -14,10 +22,17 @@ export interface AnnounceFacts {
   saveError?: string;
   judge: { pass: boolean; ok: number; total: number; levelId: string } | null;
   selection: { comps: string[]; wires: string[] };
+  wire: WireFacts;
   labels: Map<string, string>;
 }
 
-export type AnnounceSeen = { run: string; save: string; judge: string; sel: string };
+export type AnnounceSeen = {
+  run: string;
+  save: string;
+  judge: string;
+  sel: string;
+  wire: { pending: string | null; links: string[] };
+};
 
 /** 中间态念出来会把读屏淹掉：连续编辑时 pending→saving→saved 每半秒翻一次 */
 const QUIET_SAVE: SaveStateLabel[] = ["unsaved", "pending", "saving"];
@@ -31,6 +46,7 @@ export function factsKey(f: AnnounceFacts): AnnounceSeen {
     save: QUIET_SAVE.includes(f.save) ? "" : f.save,
     judge: f.judge ? `${f.judge.levelId}:${f.judge.ok}/${f.judge.total}` : "",
     sel: [...f.selection.comps, ...f.selection.wires].join(","),
+    wire: { pending: f.wire.pending, links: f.wire.links.map(linkRef) },
   };
 }
 
@@ -64,6 +80,33 @@ function selLine(f: AnnounceFacts) {
   return "已选中 " + parts.join("、");
 }
 
+const linkRef = (l: { from: string; to: string }) => `${l.from}>${l.to}`;
+
+/**
+ * 连线这一路要回答三个问题：线头现在在谁手上、这根线落下去没有、断掉的是哪根。
+ * 起点→终点是在同一次操作里连续翻的（pending 消失 + 多出一根线），所以先看差集
+ * 再看 pending，否则"接好了"会被念成"已取消"。
+ */
+function wireLine(f: AnnounceFacts, prev: { pending: string | null; links: string[] }) {
+  const name = (ref: string) => endName(ref, f.labels);
+  const spoken = (ref: string) => {
+    const [a, b] = ref.split(">");
+    return `${name(a)} → ${name(b)}`;
+  };
+  const next = f.wire.links.map(linkRef);
+  const added = next.filter((r) => !prev.links.includes(r));
+  const removed = prev.links.filter((r) => !next.includes(r));
+  if (added.length === 1) return `已接好一根线：${spoken(added[0])}`;
+  if (added.length > 1) return `已接好 ${added.length} 根线：${spoken(added[0])}`;
+  if (removed.length === 1) return `已断开一根线：${spoken(removed[0])}`;
+  if (removed.length > 1) return `已断开 ${removed.length} 根线`;
+  if (f.wire.pending) return `连线起点已选 ${name(f.wire.pending)}：再点一个端口完成连线，按 Esc 取消`;
+  /* 只清掉起点、线一根没多：可能是按了 Esc，也可能是这一接被拒（端点在这个电路里
+     接不上，或这一对本来就有线）。三种情况对用户的结论相同——没有新线接上。 */
+  if (prev.pending) return "连线已取消：没有新线接上";
+  return `连线有变化：现在共 ${next.length} 根`;
+}
+
 /**
  * 状态变了就返回要播的那句 + 新的基线；没变返回 null（什么都不播）。
  * 一次只处理最高优先级的一条，剩下的下一轮再讲，避免叠成一句谁也听不清的话。
@@ -79,6 +122,10 @@ export function nextAnnouncement(
    * 噪音，若按"键位变化"判断就会把刚被静音的那句又念出来。 */
   if (next.save && next.save !== seen.save) return { say: saveLine(f), seen: Object.assign(out, { save: next.save }) };
   if (next.run !== seen.run) return { say: runLine(f), seen: Object.assign(out, { run: next.run }) };
+  /* 连线排在选区之前：删掉一段电路时"断了几根线"比"选中了什么"更是结论。 */
+  const wireChanged =
+    next.wire.pending !== seen.wire.pending || next.wire.links.join("|") !== seen.wire.links.join("|");
+  if (wireChanged) return { say: wireLine(f, seen.wire), seen: Object.assign(out, { wire: next.wire }) };
   if (next.sel !== seen.sel) return { say: selLine(f), seen: Object.assign(out, { sel: next.sel }) };
   return null;
 }

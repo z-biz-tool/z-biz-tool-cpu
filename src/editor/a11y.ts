@@ -17,6 +17,8 @@ import type { HitResult } from "./hitIndex.ts";
 export interface CompSummary {
   id: string;
   name?: string;
+  /** 画布、属性面板、端口清单与播报对同一个元件的共用叫法（见 compLabel） */
+  label: string;
   type: string;
   pins: { id: string; dir: "in" | "out"; width: number }[];
 }
@@ -30,6 +32,21 @@ export interface WireSummary {
 export interface A11yModel {
   comps: CompSummary[];
   wires: WireSummary[];
+}
+
+/**
+ * 叫法只有一处定义：用户起了名字就叫名字，没起就叫元件类型标题（和属性面板的
+ * chip 一致）。内部 id 谁都对不上，读屏念出 "co0n2995us2" 等于什么也没说 ——
+ * 浏览器实测过：放置一个未命名输入端后，选区播报整句都是这串 id。
+ */
+export function compLabel(design: Design, inst: CompInstance): string {
+  return inst.name || defOf(design, inst.type, inst.params)?.label || inst.type;
+}
+
+/** "元件内部 id.引脚" 这种端点引用念给用户听时的样子：叫得出名字就叫名字 */
+export function endName(ref: string, labels: Map<string, string>): string {
+  const i = ref.lastIndexOf(".");
+  return `${labels.get(ref.slice(0, i)) ?? ref.slice(0, i)}.${ref.slice(i + 1)}`;
 }
 
 /**
@@ -66,6 +83,7 @@ export function buildA11y(c: Circuit, design: Design, sim?: Simulator): A11yMode
     comps.push({
       id: inst.id,
       name: inst.name,
+      label: compLabel(design, inst),
       type: inst.type,
       pins: def ? def.pins.map((p, pi) => ({ id: p.id, dir: p.kind, width: portWidth(inst, def, pi, sim, bits) })) : [],
     });
@@ -105,7 +123,7 @@ export function portStructure(model: A11yModel): {
   pins: Map<string, string>;
   openPorts: OpenPort[];
 } {
-  const labels = new Map(model.comps.map((c) => [c.id, c.name || c.id]));
+  const labels = new Map(model.comps.map((c) => [c.id, c.label]));
   const linked = new Set<string>();
   for (const w of model.wires) {
     linked.add(w.from);
@@ -135,19 +153,22 @@ export function portStructure(model: A11yModel): {
 /** 命中测试 + a11y 模型：返回焦点元件的引脚状态文本 */
 export function describeFocus(model: A11yModel, hit: HitResult | undefined): string {
   if (!hit) return "当前画布没有命中元件";
+  /* 说明句里出现的每个元件都走同一套叫法：连线的两个端点原本直接是 "c0.x → c1.y"，
+     读屏用户听到的是两个内部 id，跟画布上看到的对不上。 */
+  const labels = new Map(model.comps.map((c) => [c.id, c.label]));
   if (hit.type === "comp" && hit.comp) {
     const meta = model.comps.find((c) => c.id === hit.comp!.id);
     if (!meta) return hit.comp.id;
-    return `${meta.name ?? meta.id} 类型 ${meta.type} 引脚 ${meta.pins.length} 个`;
+    return `${meta.label} 类型 ${meta.type} 引脚 ${meta.pins.length} 个`;
   }
   if (hit.type === "pin" && hit.pin) {
     const meta = model.comps.find((c) => c.id === hit.pin!.comp);
     const ps = meta?.pins.find((p) => p.id === hit.pin!.pin);
-    return `${meta?.name ?? hit.pin.comp} 引脚 ${ps?.id ?? hit.pin.pin} 方向 ${ps?.dir ?? "?"} 位宽 ${ps?.width ?? "?"}`;
+    return `${labels.get(hit.pin.comp) ?? hit.pin.comp} 引脚 ${ps?.id ?? hit.pin.pin} 方向 ${ps?.dir ?? "?"} 位宽 ${ps?.width ?? "?"}`;
   }
   if (hit.type === "wire" && hit.wire) {
     const w = model.wires.find((x) => x.id === hit.wire!.id);
-    return `连线 ${w?.from ?? hit.wire.id} → ${w?.to ?? "?"}`;
+    return w ? `连线 ${endName(w.from, labels)} → ${endName(w.to, labels)}` : `连线 ${hit.wire.id} 已不在连接表里`;
   }
   return "";
 }
