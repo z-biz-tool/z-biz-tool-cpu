@@ -2335,6 +2335,32 @@ ok:
     check("GATE: 波形行名是元件命名，内部 id 只留在 title 里备查", /sim\.compById\(s\.compId\)\?\.inst\?\.name \?\? s\.compId/.test(watch) && /title=\{r\.key\}/.test(watch));
     check("GATE: 没有波形时说的是下一步怎么做，不是一句空态", /还没有波形[\s\S]{0,40}给元件起个名字/.test(watch));
     check("GATE: 信号按名称排序，翻页重排不会打乱行序", /\.sort\(\(a, b\) => a\.label\.localeCompare/.test(watch));
+
+    /* doc 02 §9 给波形定的键位：←→ 移时间游标、Enter 定位信号、Tab 退出。
+     * 游标方向是最容易写反的一处 —— 格子里数组是 reverse 过的（下标 0 在最右），
+     * 所以 → 必须是下标变小。写反了读屏会念错拍，肉眼看着却"挺正常"。 */
+    check("GATE: 波形行可聚焦且整块只有一个 Tab 停靠点", /className="wave-signal"/.test(watch) && /tabIndex=\{ri === \(rowAt < 0 \? 0 : rowAt\) \? 0 : -1\}/.test(watch));
+    check("GATE: → 走向最新的一拍（下标变小）", /ArrowRight"\) moveTo\(row, cell - 1\)/.test(watch) && /ArrowLeft"\) moveTo\(row, cell \+ 1\)/.test(watch));
+    check("GATE: ↑↓ 换信号，Home／End 走到两端", /ArrowDown"\) moveTo\(row \+ 1, cell\)/.test(watch) && /ArrowUp"\) moveTo\(row - 1, cell\)/.test(watch) && /Home"\) moveTo\(row, cells - 1\)/.test(watch) && /End"\) moveTo\(row, 0\)/.test(watch));
+    check("GATE: Enter 把游标所在的信号选进画布", /setSelection\(\{ comps: \[r\.compId\], wires: \[\] \}\)/.test(watch));
+    check("GATE: 游标的值是文字读数，不只靠 tooltip", /id="wave-readout"[^>]*role="status"/.test(watch) && /aria-describedby="wave-readout"/.test(watch) && /第 \$\{cursor\.tick\} 拍 \$\{active!\.label\}/.test(watch));
+    check("GATE: 未驱动的拍在读数里说明，不冒充 0 是真的", /cursor\.driven \? "" : "（未驱动，按 0 读取）"/.test(watch));
+    check("GATE: 信号或拍被收走后游标夹紧，不指到空处", /Math\.min\(at\.row, rows\.length - 1\)/.test(watch) && /Math\.min\(at!\.cell, active\.cells\.length - 1\)/.test(watch));
+    check("GATE: 游标格靠描边标出，不是只换个颜色", /\.wave-cell\.cursor\s*\{[^}]*outline: 2px solid var\(--focus\)/.test(css));
+
+    /* GATE: 焦点域仲裁 —— 清单里按 ↑↓←→／空格，不能同时被画布快捷键吃掉
+     * （doc 02 §9"不得发生"：波形方向键移动电路元件、空格双切换）。
+     * 标记必须同时挂在两块清单上、并被 App 的选择器认账：少了任一侧，
+     * 现象都是"游标走了一格，电路也被搬了一格"，只有实跑才会露出来。 */
+    const appSrc = strip("../src/App.tsx");
+    const a11ySrc = strip("../src/editor/CanvasA11y.tsx");
+    check("GATE: 画布快捷键让位于声明了自己吃按键的区域", /\[data-keys='local'\]/.test(appSrc));
+    check("GATE: 元件清单与波形清单都声明了自己吃按键", /<table data-keys="local">/.test(a11ySrc) && /className="wave-list" data-keys="local"/.test(watch));
+    check(
+      "GATE: 声明范围只圈清单，不圈整个可访问视图（否则读值按钮上的方向键会失去单步）",
+      /<section className="a11y-only"[^>]*>/.test(a11ySrc) && (a11ySrc.match(/data-keys/g) ?? []).length === 1,
+    );
+    check("GATE: 手册把两块清单的按键域写进说明", /元件清单或波形清单里时同样不生效/.test(watch));
   }
 
   /* GATE: 播报层的接线 —— 逻辑可以单测，但"挂在页面哪、用什么 live 语义"

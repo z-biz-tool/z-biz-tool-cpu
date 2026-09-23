@@ -1150,15 +1150,27 @@ input[type="range"]:focus-visible {
   align-items: center;
   gap: 6px;
 }
-.wave-name {
+.wave-signal {
   flex: none;
   width: 112px;
+  padding: 0 2px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--text);
   font-size: 11px;
   font-family: var(--mono);
-  color: var(--text);
+  text-align: left;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  cursor: pointer;
+}
+.wave-signal:hover {
+  background: var(--panel-2);
+}
+.wave-signal:focus-visible {
+  outline-offset: -2px;
 }
 .wave-cells {
   display: flex;
@@ -1176,10 +1188,29 @@ input[type="range"]:focus-visible {
   background: var(--panel-2);
   color: var(--dim);
 }
+/* 游标停在某一拍上：除了描边（形状，不靠颜色）还把字重提上来，
+   保证"色觉之外也看得出这是被指到的那一格"。 */
+.wave-cell.cursor {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+  color: var(--text);
+  background: var(--panel);
+  font-weight: 650;
+}
 .wave-cell.hi {
   background: var(--accent-soft);
   color: var(--accent);
   font-weight: 650;
+}
+.wave-cell.hi.cursor {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.wave-readout {
+  margin: 6px 0 0;
+  font-size: 11px;
+  font-family: var(--mono);
+  color: var(--text);
 }
 
 .help table {

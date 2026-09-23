@@ -1,5 +1,5 @@
 import { Button, Empty, Table, Tag } from "antd";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { CONDS, OPS, REG_NAMES, SYSS } from "../../asm/isa.ts";
 import { isaDoc } from "../../asm/assembler.ts";
 import { CTRL_DOC } from "../../cpu/reference.ts";
@@ -75,11 +75,20 @@ export function ProbePanel() {
  * 3.95 与 2.75（AA 要 4.5），而且行名是 c_x8k2.out 这种内部 id，读屏和肉眼都
  * 认不出是哪个元件。改法：颜色走 index.css 的变量（于是对比度门禁量得到，
  * 实测 5.66 / 4.94 / 14.05），行名用元件的命名，内部 id 留在 title 里备查。
+ *
+ * doc 02 §9 还给波形定了键位：方向键移时间游标、Enter 定位信号、Tab 退出。
+ * 一格一拍的值原先只有鼠标 tooltip 才看得到，键盘用户什么都拿不到，所以游标
+ * 停在哪一拍都另外写成一句不打断的话（读屏与肉眼共用同一份）。
  */
 function WaveformPanel() {
   const sim = useEditor((s) => s.sim);
   const tick = useEditor((s) => s.tick);
+  const setSelection = useEditor((s) => s.setSelection);
   const [open, setOpen] = useState(false);
+  /** 焦点停在哪一条信号、游标停在该行的第几格（0 = 最新那一拍） */
+  const [at, setAt] = useState<{ row: number; cell: number } | null>(null);
+  const rowRefs = useRef(new Map<number, HTMLButtonElement>());
+
   const rows = useMemo(() => {
     if (!open) return [];
     return sim.trace
@@ -87,6 +96,7 @@ function WaveformPanel() {
       .map((s) => {
         const name = sim.compById(s.compId)?.inst?.name ?? s.compId;
         return {
+          compId: s.compId,
           key: s.compId + "." + s.pin,
           label: `${name}.${s.pin}`,
           cells: sim.trace.historyOf(s, 64).reverse(),
@@ -104,11 +114,46 @@ function WaveformPanel() {
       </div>
     );
   }
+
+  /* 元件被删、仿真被复位之后游标会指到空处：读数按夹紧后的下标算，
+   * 游标越界就当没有游标，不拿 undefined 去拼一句话。 */
+  const rowAt = at ? Math.min(at.row, rows.length - 1) : -1;
+  const active = rowAt >= 0 ? rows[rowAt] : undefined;
+  const cellAt = active ? Math.min(at!.cell, active.cells.length - 1) : -1;
+  const cursor = active && cellAt >= 0 ? active.cells[cellAt] : undefined;
+
+  const moveTo = (row: number, cell: number) => {
+    if (!rows.length) return;
+    const r = Math.max(0, Math.min(rows.length - 1, row));
+    setAt({ row: r, cell: Math.max(0, Math.min(rows[r].cells.length - 1, cell)) });
+    rowRefs.current.get(r)?.focus();
+  };
+
+  const onRowKey = (e: React.KeyboardEvent, row: number) => {
+    const cells = rows[row]?.cells.length ?? 1;
+    const cell = Math.min(at?.cell ?? 0, cells - 1);
+    /* 右边是最新的一拍，所以 → 往"更近"走 = 下标变小 */
+    if (e.key === "ArrowRight") moveTo(row, cell - 1);
+    else if (e.key === "ArrowLeft") moveTo(row, cell + 1);
+    else if (e.key === "ArrowDown") moveTo(row + 1, cell);
+    else if (e.key === "ArrowUp") moveTo(row - 1, cell);
+    else if (e.key === "Home") moveTo(row, cells - 1);
+    else if (e.key === "End") moveTo(row, 0);
+    else return;
+    e.preventDefault();
+  };
+
+  const readout = cursor
+    ? `第 ${cursor.tick} 拍 ${active!.label} = ${cursor.width > 4 ? hex(cursor.value, cursor.width) : cursor.value}${
+        cursor.driven ? "" : "（未驱动，按 0 读取）"
+      }`
+    : "";
+
   return (
     <div className="wave-wrap">
       <div className="asm-actions">
         <span className="sub-title">波形</span>
-        <span className="dim">每行一个信号，每格一拍（右边最新）；格子里是那一拍的值</span>
+        <span className="dim">每行一个信号，每格一拍（右边最新）；↑↓ 换信号，←→ 移游标，回车选中该元件</span>
         <Button size="small" className="wave-collapse" onClick={() => setOpen(false)}>
           收起
         </Button>
@@ -116,17 +161,30 @@ function WaveformPanel() {
       {rows.length === 0 ? (
         <div className="panel-note">还没有波形：给元件起个名字，再按 → 跑一拍。</div>
       ) : (
-        <div className="wave-list">
-          {rows.map((r) => (
+        <div className="wave-list" data-keys="local">
+          {rows.map((r, ri) => (
             <div key={r.key} className="wave-row">
-              <span className="wave-name" title={r.key}>
+              <button
+                type="button"
+                className="wave-signal"
+                ref={(el) => {
+                  if (el) rowRefs.current.set(ri, el);
+                  else rowRefs.current.delete(ri);
+                }}
+                tabIndex={ri === (rowAt < 0 ? 0 : rowAt) ? 0 : -1}
+                onFocus={() => setAt({ row: ri, cell: at?.row === ri ? at!.cell : 0 })}
+                onClick={() => setSelection({ comps: [r.compId], wires: [] })}
+                onKeyDown={(e) => onRowKey(e, ri)}
+                aria-describedby="wave-readout"
+                title={r.key}
+              >
                 {r.label}
-              </span>
+              </button>
               <span className="wave-cells">
                 {r.cells.map((c, i) => (
                   <span
                     key={i}
-                    className={"wave-cell" + (c.value ? " hi" : "")}
+                    className={"wave-cell" + (c.value ? " hi" : "") + (ri === rowAt && i === cellAt ? " cursor" : "")}
                     title={`第 ${c.tick} 拍 ${r.label} = ${c.width > 4 ? hex(c.value, c.width) : c.value}`}
                   >
                     {c.width > 4 ? hex(c.value, c.width) : c.value}
@@ -137,6 +195,9 @@ function WaveformPanel() {
           ))}
         </div>
       )}
+      <p className="wave-readout" id="wave-readout" role="status" aria-live="polite">
+        {readout}
+      </p>
     </div>
   );
 }
@@ -202,6 +263,7 @@ export function HelpPanel() {
       </table>
       <div className="panel-note">
         焦点在输入框、下拉框或弹窗里时，以上快捷键不生效——按键交给当前区域处理（文本框里的 ⌘Z 撤销的是文字）。
+        焦点在可访问视图的元件清单或波形清单里时同样不生效：那两块用方向键走位，空格是「选中这个元件」而不是「运行」。
       </div>
 
       <div className="sub-title">键盘与读屏</div>

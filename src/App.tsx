@@ -47,15 +47,19 @@ const TABS: { key: PanelKey; label: string | ((i: TabInfo) => React.ReactNode); 
 
 /**
  * 焦点域判定（doc 02 §9：先分派焦点域，再决定操作对象）。
- * 命中这两类区域时，按键归区域自己，不能打到背后的电路上：
+ * 命中这几类区域时，按键归区域自己，不能打到背后的电路上：
  *  - 文本编辑区：⌘Z 撤销的是文字，Delete 删的是字符
  *  - 模态弹层（成就弹窗、Popconfirm）：空格/方向键不该偷偷推进仿真
  */
 function inFocusZone(e: KeyboardEvent): boolean {
   const el = e.target as HTMLElement | null;
   if (!el || typeof el.closest !== "function") return false;
+  /* [data-keys="local"] 是"这块区域自己吃按键"的声明：可访问视图的元件清单与
+   * 波形清单在里面用 ↑↓←→ 走位、空格/回车确认。不挡掉的话，同一按键会同时
+   * 被下面的画布快捷键吃掉 —— doc 02 §9 的"不得发生"列写的正是这两件事：
+   * 「波形方向键移动电路元件」「空格同时触发按钮与全局监听造成双切换」。 */
   return !!el.closest(
-    "input, textarea, [contenteditable='true'], .ant-select, .ant-modal-wrap, .ant-popover, [role='dialog']"
+    "input, textarea, [contenteditable='true'], .ant-select, .ant-modal-wrap, .ant-popover, [role='dialog'], [data-keys='local']"
   );
 }
 

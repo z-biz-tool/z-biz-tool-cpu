@@ -159,7 +159,10 @@ export function CanvasA11y() {
       <p id="a11y-focus-hint" className="a11y-hint">
         {focusHint || "画布上还没有元件。"}
       </p>
-      <table>
+      {/* data-keys="local"：这张清单自己吃 ↑↓←→ 与空格（走访 / 选中），不再同时
+          被 App 的画布快捷键吃掉。范围只圈清单 —— 圈整个 section 会让"读取当前
+          引脚值"按钮上的方向键也失去原有的单步推进。 */}
+      <table data-keys="local">
         <thead>
           <tr>
             <th scope="col">名称</th>
