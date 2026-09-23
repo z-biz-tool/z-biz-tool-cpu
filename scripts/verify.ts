@@ -3,6 +3,7 @@
  * 覆盖组合逻辑、位宽推断、总线拆分/合并、时序元件、子电路、错误诊断。
  */
 import { CircuitBuilder } from "../src/core/build.ts";
+import { baseDef } from "../src/core/registry.ts";
 import { sortDiags } from "../src/core/netlist.ts";
 import { RUN_STATE_TEXT, Simulator, settleState, worstSettle } from "../src/core/sim.ts";
 import { totalCost } from "../src/core/custom.ts";
@@ -2859,6 +2860,206 @@ ok:
     const { readFileSync } = await import("node:fs");
     const panel = readFileSync(new URL("../src/editor/panels/ChallengePanel.tsx", import.meta.url).pathname, "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
     check("GATE: 面板基准改走 parCost", /parCost\(level\)/.test(panel) && !/level\.par\s*\?\?/.test(panel));
+  }
+
+  /* ---------------------------------------------------------------- *
+   * 存储书介质元件（book-memory《囚禁电荷》）
+   * ---------------------------------------------------------------- */
+  {
+    check(
+      "BK: 5 个介质元件都在元件库",
+      ["CAPCELL", "SENSEAMP", "REFCTRL", "FGCELL", "PLATTER"].every((t) => !!baseDef(t)),
+      "缺：" + ["CAPCELL", "SENSEAMP", "REFCTRL", "FGCELL", "PLATTER"].filter((t) => !baseDef(t)).join(",")
+    );
+  }
+
+  /* CAPCELL：写满 → 保持 → 漏半 → 漏光（leakN=16） */
+  {
+    const b = new CircuitBuilder();
+    const en = b.add("input", 0, 0, { bitWidth: 1 });
+    const bl = b.add("input", 0, 3, { bitWidth: 2 });
+    const ck = b.add("clock", 0, 6, { divide: 1 });
+    const cap = b.add("CAPCELL", 5, 1, { leakN: 16 });
+    const qo = b.add("output", 10, 1, { bitWidth: 2 });
+    b.link([
+      [en, "out", cap, "EN"],
+      [bl, "out", cap, "BL"],
+      [ck, "out", cap, "CLK"],
+      [cap, "Q", qo, "in"],
+    ]);
+    const sim = mkSim(b.build());
+    sim.setInput(en, 1);
+    sim.setInput(bl, 2);
+    sim.step(); // 写入满电平
+    sim.setInput(en, 0);
+    for (let i = 0; i < 8; i++) sim.step();
+    const keep = out(sim, qo);
+    for (let i = 0; i < 8; i++) sim.step(); // 距写入 16 拍
+    const half = out(sim, qo);
+    for (let i = 0; i < 16; i++) sim.step(); // 距写入 32 拍
+    const gone = out(sim, qo);
+    check("CAPCELL 写入后保持满电平", keep === 2, `keep=${keep}`);
+    check("CAPCELL 一个漏电周期掉半级", half === 1, `half=${half}`);
+    check("CAPCELL 两个周期后漏光", gone === 0, `gone=${gone}`);
+  }
+
+  /* 无感放：开字线读 = 毁（BL 没被驱动，沿上采样到 0） */
+  {
+    const b = new CircuitBuilder();
+    const en = b.add("input", 0, 0, { bitWidth: 1 });
+    const bl = b.add("input", 0, 3, { bitWidth: 2 });
+    const ck = b.add("clock", 0, 6, { divide: 1 });
+    const cap = b.add("CAPCELL", 5, 1);
+    const qo = b.add("output", 10, 1, { bitWidth: 2 });
+    b.link([
+      [en, "out", cap, "EN"],
+      [bl, "out", cap, "BL"],
+      [ck, "out", cap, "CLK"],
+      [cap, "Q", qo, "in"],
+    ]);
+    const sim = mkSim(b.build());
+    sim.setInput(en, 1);
+    sim.setInput(bl, 2);
+    sim.step(); // 写入
+    sim.setInput(bl, 0); // 位线无驱动
+    sim.step(); // 开字线的沿：电荷被毁
+    const dead = out(sim, qo);
+    check("CAPCELL 无感放时开字线读毁掉电荷", dead === 0, `dead=${dead}`);
+  }
+
+  /* SENSEAMP：预充电 → 放大成满幅 → 回写（读后数据仍在） */
+  {
+    const b = new CircuitBuilder();
+    const en = b.add("input", 0, 0, { bitWidth: 1 });
+    const se = b.add("input", 0, 3, { bitWidth: 1 });
+    const ck = b.add("clock", 0, 6, { divide: 1 });
+    const cap = b.add("CAPCELL", 5, 1, { leakN: 16 });
+    const sa = b.add("SENSEAMP", 9, 4);
+    const qo = b.add("output", 13, 1, { bitWidth: 2 });
+    b.link([
+      [en, "out", cap, "EN"],
+      [ck, "out", cap, "CLK"],
+      [cap, "Q", qo, "in"],
+      [cap, "Q", sa, "IN"],
+      [se, "out", sa, "SE"],
+      [sa, "OUT", cap, "BL"],
+    ]);
+    const sim = mkSim(b.build());
+    sim.setInput(se, 0); // 位线预充电 VDD/2
+    sim.setInput(en, 1);
+    sim.step(); // 预充电电平进单元
+    const pre = out(sim, qo);
+    sim.setInput(se, 1); // 感放拉满幅
+    sim.step(); // 回写满电平
+    const full = out(sim, qo);
+    sim.setInput(en, 0);
+    for (let i = 0; i < 16; i++) sim.step(); // 漏回半级
+    sim.setInput(en, 1); // 开字线读：感放当场回写
+    sim.step();
+    const after = out(sim, qo);
+    check("SENSEAMP 预充电进单元为半电平", pre === 1, `pre=${pre}`);
+    check("SENSEAMP 半电平放大成满幅", full === 2, `full=${full}`);
+    check("SENSEAMP 读后数据仍在（回写）", after === 2, `after=${after}`);
+  }
+
+  /* REFCTRL：每 window 拍轮询下一行并回绕 */
+  {
+    const b = new CircuitBuilder();
+    const ck = b.add("clock", 0, 0, { divide: 1 });
+    const rst = b.add("input", 0, 3, { bitWidth: 1 });
+    const ref = b.add("REFCTRL", 5, 1, { addrBits: 2, window: 2 });
+    const ro = b.add("output", 10, 1, { bitWidth: 2 });
+    b.link([
+      [ck, "out", ref, "CLK"],
+      [rst, "out", ref, "RST"],
+      [ref, "ROW", ro, "in"],
+    ]);
+    const sim = mkSim(b.build());
+    sim.setInput(rst, 0);
+    for (let i = 0; i < 4; i++) sim.step();
+    const r2 = out(sim, ro);
+    for (let i = 0; i < 4; i++) sim.step();
+    const rWrap = out(sim, ro);
+    check("REFCTRL 每 window 拍前进一行", r2 === 2, `r=${r2}`);
+    check("REFCTRL 轮询回绕", rWrap === 0, `r=${rWrap}`);
+  }
+
+  /* FGCELL：写慢（脉宽不足无效）+ 擦除置 1 + P/E 寿命 */
+  {
+    const b = new CircuitBuilder();
+    const ck = b.add("clock", 0, 0, { divide: 1 });
+    const prog = b.add("input", 0, 3, { bitWidth: 1 });
+    const erase = b.add("input", 0, 6, { bitWidth: 1 });
+    const fg = b.add("FGCELL", 5, 1, { peLimit: 2 });
+    const qo = b.add("output", 10, 0, { bitWidth: 1 });
+    const peo = b.add("output", 10, 3, { bitWidth: 8 });
+    const sto = b.add("output", 10, 6, { bitWidth: 1 });
+    b.link([
+      [ck, "out", fg, "CLK"],
+      [prog, "out", fg, "PROG"],
+      [erase, "out", fg, "ERASE"],
+      [fg, "Q", qo, "in"],
+      [fg, "PE", peo, "in"],
+      [fg, "STS", sto, "in"],
+    ]);
+    const sim = mkSim(b.build());
+    sim.setInput(prog, 1);
+    sim.setInput(erase, 0);
+    for (let i = 0; i < 7; i++) sim.step();
+    const short = out(sim, qo);
+    sim.step(); // 第 8 拍编程完成
+    const done = out(sim, qo);
+    sim.setInput(prog, 0);
+    sim.setInput(erase, 1);
+    sim.step(); // 擦除置 1，PE=1
+    sim.setInput(erase, 0);
+    sim.step();
+    sim.setInput(erase, 1);
+    sim.step(); // PE=2
+    sim.setInput(erase, 0);
+    sim.step();
+    const pe2 = out(sim, peo);
+    sim.setInput(erase, 1);
+    sim.step(); // PE=3 超限
+    const over = out(sim, sto);
+    const pe3 = out(sim, peo);
+    check("FGCELL 脉宽不足编程无效（写慢）", short === 1, `q=${short}`);
+    check("FGCELL 满 8 拍编程置 0", done === 0, `q=${done}`);
+    check("FGCELL 擦除置 1 且按沿计 P/E", pe2 === 2, `pe=${pe2}`);
+    check("FGCELL 超过 peLimit 拉响 STS", over === 1 && pe3 === 3, `sts=${over} pe=${pe3}`);
+  }
+
+  /* PLATTER：寻道一步一道 + 旋转每拍一格 + RD 读磁头下方扇区 */
+  {
+    const b = new CircuitBuilder();
+    const ck = b.add("clock", 0, 0, { divide: 1 });
+    const tgt = b.add("input", 0, 3, { bitWidth: 2 });
+    const step = b.add("input", 0, 6, { bitWidth: 1 });
+    const rd = b.add("input", 0, 9, { bitWidth: 1 });
+    const pl = b.add("PLATTER", 5, 1, { addrBits: 2, sectors: 4, data: "1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16" });
+    const qo = b.add("output", 11, 0, { bitWidth: 8 });
+    const to = b.add("output", 11, 3, { bitWidth: 8 });
+    const ro = b.add("output", 11, 6, { bitWidth: 8 });
+    b.link([
+      [ck, "out", pl, "CLK"],
+      [tgt, "out", pl, "TARGET"],
+      [step, "out", pl, "STEP"],
+      [rd, "out", pl, "RD"],
+      [pl, "Q", qo, "in"],
+      [pl, "TRK", to, "in"],
+      [pl, "ROT", ro, "in"],
+    ]);
+    const sim = mkSim(b.build());
+    sim.setInput(tgt, 2);
+    sim.setInput(step, 1);
+    sim.step();
+    sim.step();
+    const trk = out(sim, to);
+    sim.setInput(rd, 1);
+    const q = out(sim, qo);
+    const idx = out(sim, to) * 4 + out(sim, ro);
+    check("PLATTER 磁头两拍寻到道 2", trk === 2, `trk=${trk}`);
+    check("PLATTER RD 给出磁头下方扇区", q === idx + 1, `q=${q} idx=${idx}`);
   }
 
 console.log(`\n${failed === 0 ? "\x1b[32m" : "\x1b[31m"}内核自检：${passed} 通过 / ${failed} 失败\x1b[0m`);

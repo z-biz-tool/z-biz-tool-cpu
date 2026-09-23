@@ -651,6 +651,188 @@ export const BUILTIN_DEFS: CompDef[] = [
     description: "只读存储，可用作指令译码器 / 微码",
   },
 
+  /* ---------------- 存储书介质元件（book-memory《囚禁电荷》） ---------------- */
+  {
+    type: "CAPCELL",
+    label: "电容位元 1T1C",
+    category: "mem",
+    size: { w: 3, h: 3 },
+    pins: [
+      pin("EN", 0, 0.5, "l", "in", { width: 1 }),
+      pin("CLK", 0, 1.5, "l", "in", { width: 1, clock: true }),
+      pin("BL", 0, 2.5, "l", "in", { width: 2 }),
+      pin("Q", 3, 1.5, "r", "out", { width: 2 }),
+    ],
+    cost: 2,
+    widthMode: "one",
+    glyph: "mem",
+    symbol: "1T",
+    params: [{ key: "leakN", label: "漏电周期(拍)", kind: "int", min: 1, max: 4096, default: 16 }],
+    eval(c) {
+      c.w("Q", c.s.charge ?? 0);
+    },
+    onRise(c) {
+      const leakN = Math.max(1, c.p<number>("leakN") || 16);
+      c.s.since = (c.s.since ?? 0) + 1;
+      if ((c.s.since ?? 0) >= leakN) {
+        c.s.since = 0;
+        c.s.charge = Math.max(0, (c.s.charge ?? 0) - 1);
+      }
+      if (c.r("EN")) {
+        const v = c.r("BL") & 3;
+        c.s.charge = v >= 2 ? 2 : v;
+        c.s.since = 0;
+      }
+    },
+    description: "1T1C：电平 0/1/2 = GND/VDD/2/VDD。EN=1 时每个时钟沿采样 BL；每 leakN 拍漏掉一级电。开字线的沿上 BL 没被驱动就会毁掉电荷——读请走感应放大器",
+  },
+  {
+    type: "SENSEAMP",
+    label: "感应放大器",
+    category: "mem",
+    size: { w: 3, h: 2 },
+    pins: [
+      pin("IN", 0, 0.5, "l", "in", { width: 2 }),
+      pin("SE", 0, 1.5, "l", "in", { width: 1 }),
+      pin("OUT", 3, 1, "r", "out", { width: 2 }),
+    ],
+    cost: 3,
+    widthMode: "one",
+    glyph: "mem",
+    symbol: "SA",
+    params: [],
+    eval(c) {
+      // SE=0：位线预充电到半电平 VDD/2；SE=1：把半电平拉满幅
+      c.w("OUT", c.r("SE") ? (c.r("IN") >= 1 ? 2 : 0) : 1);
+    },
+    description: "SE=1 时把位线半电平放大成满幅并回写单元（破坏性读的救星）；SE=0 时输出 VDD/2 预充电电平",
+  },
+  {
+    type: "REFCTRL",
+    label: "刷新控制器",
+    category: "mem",
+    size: { w: 3, h: 3 },
+    pins: [
+      pin("CLK", 0, 0.5, "l", "in", { width: 1, clock: true }),
+      pin("RST", 0, 1.5, "l", "in", { width: 1 }),
+      pin("ROW", 3, 1.5, "r", "out", { widthParam: "addrBits" }),
+    ],
+    cost: 4,
+    widthMode: "one",
+    glyph: "mem",
+    symbol: "REF",
+    params: [
+      { key: "addrBits", label: "行地址线", kind: "int", min: 1, max: 8, default: 3, structural: true },
+      { key: "window", label: "刷新窗口(拍/行)", kind: "int", min: 1, max: 4096, default: 32 },
+    ],
+    eval(c) {
+      c.w("ROW", c.s.row ?? 0);
+    },
+    onRise(c) {
+      if (c.r("RST")) {
+        c.s.row = 0;
+        c.s.n = 0;
+        return;
+      }
+      const rows = 2 ** (c.p<number>("addrBits") || 3);
+      c.s.n = (c.s.n ?? 0) + 1;
+      if ((c.s.n ?? 0) >= Math.max(1, c.p<number>("window") || 32)) {
+        c.s.n = 0;
+        c.s.row = ((c.s.row ?? 0) + 1) % rows;
+      }
+    },
+    description: "每 window 拍轮询到下一行——64ms / 8192 行的离散化；ROW 输出当前该刷新的行号",
+  },
+  {
+    type: "FGCELL",
+    label: "浮栅位元",
+    category: "mem",
+    size: { w: 3, h: 4 },
+    pins: [
+      pin("CLK", 0, 0.5, "l", "in", { width: 1, clock: true }),
+      pin("PROG", 0, 1.5, "l", "in", { width: 1 }),
+      pin("ERASE", 0, 2.5, "l", "in", { width: 1 }),
+      pin("Q", 3, 0.8, "r", "out", { width: 1 }),
+      pin("PE", 3, 2, "r", "out", { width: 8 }),
+      pin("STS", 3, 3.2, "r", "out", { width: 1 }),
+    ],
+    cost: 3,
+    widthMode: "one",
+    glyph: "mem",
+    symbol: "FG",
+    params: [
+      { key: "programTicks", label: "编程脉宽(拍)", kind: "int", min: 1, max: 256, default: 8 },
+      { key: "peLimit", label: "P/E 寿命上限", kind: "int", min: 1, max: 65535, default: 100 },
+    ],
+    eval(c) {
+      c.w("Q", c.s.bit ?? 1);
+      c.w("PE", c.s.pe ?? 0);
+      c.w("STS", (c.s.pe ?? 0) > (c.p<number>("peLimit") ?? 100) ? 1 : 0);
+    },
+    onRise(c) {
+      const erase = c.r("ERASE");
+      if (erase && !c.s.eWas) {
+        c.s.bit = 1;
+        c.s.prog = 0;
+        c.s.pe = (c.s.pe ?? 0) + 1;
+      }
+      c.s.eWas = erase ? 1 : 0;
+      if (!erase && c.r("PROG")) {
+        c.s.prog = (c.s.prog ?? 0) + 1;
+        if ((c.s.prog ?? 0) >= Math.max(1, c.p<number>("programTicks") || 8)) {
+          c.s.bit = 0;
+          c.s.prog = 0;
+        }
+      }
+    },
+    description: "浮栅：擦除置 1 且每次擦除计 1 次 P/E（PE 累加，超过 peLimit 后 STS=1）；编程要持续 programTicks 拍的脉冲才置 0——写慢读快",
+  },
+  {
+    type: "PLATTER",
+    label: "盘面（机械硬盘）",
+    category: "mem",
+    size: { w: 4, h: 5 },
+    pins: [
+      pin("CLK", 0, 0.5, "l", "in", { width: 1, clock: true }),
+      pin("TARGET", 0, 1.5, "l", "in", { widthParam: "addrBits" }),
+      pin("STEP", 0, 2.5, "l", "in", { width: 1 }),
+      pin("RD", 0, 3.5, "l", "in", { width: 1 }),
+      pin("Q", 4, 1, "r", "out", { width: 8 }),
+      pin("TRK", 4, 2.5, "r", "out", { width: 8 }),
+      pin("ROT", 4, 4, "r", "out", { width: 8 }),
+    ],
+    cost: 6,
+    widthMode: "one",
+    glyph: "mem",
+    symbol: "DISK",
+    params: [
+      { key: "addrBits", label: "磁道地址线", kind: "int", min: 1, max: 4, default: 2, structural: true },
+      { key: "sectors", label: "每道扇区数", kind: "int", min: 2, max: 64, default: 8 },
+      { key: "data", label: "盘面内容", kind: "data", default: "" },
+    ],
+    eval(c) {
+      const trk = c.s.trk ?? 0;
+      const rot = c.s.rot ?? 0;
+      c.w("TRK", trk);
+      c.w("ROT", rot);
+      if (!c.r("RD")) {
+        c.w("Q", 0);
+        return;
+      }
+      const sectors = Math.max(2, c.p<number>("sectors") || 8);
+      c.w("Q", platterOf(c)[trk * sectors + rot] ?? 0);
+    },
+    onRise(c) {
+      const sectors = Math.max(2, c.p<number>("sectors") || 8);
+      c.s.rot = ((c.s.rot ?? 0) + 1) % sectors;
+      if (c.r("STEP")) {
+        const t = c.r("TARGET");
+        c.s.trk = (c.s.trk ?? 0) + Math.sign(t - (c.s.trk ?? 0));
+      }
+    },
+    description: "盘面每拍转一格（ROT=(tick)%扇区数）；STEP=1 时磁头每拍向 TARGET 挪一道；RD=1 时 Q 给出磁头下方扇区——寻道与旋转延迟都是拍数预算",
+  },
+
   /* ---------------- 调试 ---------------- */
   {
     type: "print",
@@ -710,6 +892,15 @@ function memOf(c: EvalCtx): number[] {
     c.s._memKey = key;
   }
   return c.s._mem as number[];
+}
+
+function platterOf(c: EvalCtx): number[] {
+  const key = "platter:" + String(c.p<string>("data") ?? "");
+  if (c.s._pltKey !== key || !c.s._plt) {
+    c.s._plt = parseDataList(String(c.p<string>("data") ?? ""));
+    c.s._pltKey = key;
+  }
+  return c.s._plt as number[];
 }
 
 function toSignedLocal(v: number, bits: number): number {
