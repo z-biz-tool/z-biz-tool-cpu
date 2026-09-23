@@ -238,11 +238,20 @@ function StorageSection({
 }) {
   if (!STORAGE_LEVELS.length) return null;
   const done = STORAGE_LEVELS.filter((l) => passed(progress, l.id)).length;
+  const worlds = [...new Set(STORAGE_LEVELS.map((l) => l.id.slice(0, 2)))];
+  const worldNames: Record<string, string> = {
+    M1: "一 存就是状态",
+    M2: "二 电容与 DRAM",
+    M3: "三 浮栅与闪存",
+    M4: "四 翻译层 FTL",
+    M5: "五 磁头与盘片",
+    M6: "六 整机与掉电",
+  };
   return (
     <section className="tier">
       <div className="tier-head">
         <span>存储书 · 囚禁电荷</span>
-        <Tooltip title="第二本书：把 DRAM / Flash / 磁盘的物理翻译成拍数与预算。正在连载。">
+        <Tooltip title="第二本书：把 DRAM / Flash / 磁盘的物理翻译成拍数与预算。六个世界，18 关全部上架。">
           <Progress
             percent={Math.round((done / STORAGE_LEVELS.length) * 100)}
             size="small"
@@ -251,24 +260,31 @@ function StorageSection({
           />
         </Tooltip>
       </div>
-      <div className="tier-items">
-        {STORAGE_LEVELS.map((l) => {
-          const ok = passed(progress, l.id);
-          const rec = progress.done[l.id];
-          return (
-            <button
-              key={l.id}
-              className={"lv" + (l.id === levelId ? " on" : "") + (ok ? " done" : "")}
-              onClick={() => onOpen(l.id, progress)}
-              title={l.brief}
-            >
-              <span className="lv-no">{ok ? "✓" : l.id.split("-")[0].toUpperCase()}</span>
-              <span className="lv-name">{l.name}</span>
-              {rec?.pass && <span className="lv-cost mono">{rec.cost}</span>}
-            </button>
-          );
-        })}
-      </div>
+      {worlds.map((w) => (
+        <div key={w}>
+          <p className="teach">
+            世界 {w.replace(/^M/, "")} · {worldNames[w] ?? ""}
+          </p>
+          <div className="tier-items">
+            {STORAGE_LEVELS.filter((l) => l.id.startsWith(w)).map((l) => {
+              const ok = passed(progress, l.id);
+              const rec = progress.done[l.id];
+              return (
+                <button
+                  key={l.id}
+                  className={"lv" + (l.id === levelId ? " on" : "") + (ok ? " done" : "")}
+                  onClick={() => onOpen(l.id, progress)}
+                  title={l.brief}
+                >
+                  <span className="lv-no">{ok ? "✓" : l.id.split("-")[0].toUpperCase()}</span>
+                  <span className="lv-name">{l.name}</span>
+                  {rec?.pass && <span className="lv-cost mono">{rec.cost}</span>}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ))}
     </section>
   );
 }
