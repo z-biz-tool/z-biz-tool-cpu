@@ -21,6 +21,10 @@ import { useEditor } from "./store.ts";
  * 未连接端口清单同时是 §9 要的"端口选择器"：每一行是个按钮，按一下把该端口
  * 选作连线起点（画布上那根橡皮筋跟着走），再按另一行就落一根线 —— 键盘用户
  * 不必再用鼠标去命中几像素大的引脚。
+ *
+ * 连接表管的是"已经接好的那根线"：方向键停在哪一行，下面的「断开这根线」
+ * 「从 X 改接」就作用在哪一根上。改接是一个动作（拆线 + 把那一端留在手上），
+ * 撤销一次就回到改接之前 —— 少了这一步，键盘只能补缺线、不能挪线。
  * ------------------------------------------------------------------ */
 
 export function CanvasA11y() {
@@ -32,6 +36,8 @@ export function CanvasA11y() {
   const pendingWire = useEditor((s) => s.pendingWire);
   const startWire = useEditor((s) => s.startWire);
   const cancelWire = useEditor((s) => s.cancelWire);
+  const deleteWire = useEditor((s) => s.deleteWire);
+  const rewireWire = useEditor((s) => s.rewireWire);
   const [readout, setReadout] = useState<string[]>([]);
   /** 清单里当前停着的元件：整张表只有一个 Tab 停靠点，方向键在它内部走 */
   const [focusId, setFocusId] = useState<string | null>(null);
@@ -88,6 +94,30 @@ export function CanvasA11y() {
     }
   };
 
+  /** 连接表的漫游：整张表一个停靠点，方向键在导线之间走 */
+  const [wireFocus, setWireFocus] = useState<string | null>(null);
+  const wireRefs = useRef(new Map<string, HTMLButtonElement>());
+  const wireIds = useMemo(() => model.wires.map((w) => w.id), [model]);
+  /** 停住的那一行：被断开的那根线会当场消失，所以必须能退回第一行 */
+  const stoppedWire = wireFocus && wireIds.includes(wireFocus) ? wireFocus : (wireIds[0] ?? null);
+  const wireOf = model.wires.find((w) => w.id === stoppedWire);
+  const moveWireTo = (id: string | null) => {
+    if (!id) return;
+    setWireFocus(id);
+    wireRefs.current.get(id)?.focus();
+  };
+  const onWireKey = (e: React.KeyboardEvent, id: string) => {
+    const at = wireIds.indexOf(id);
+    const step: Record<string, number> = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 };
+    if (step[e.key]) {
+      e.preventDefault();
+      moveWireTo(wireIds[Math.min(wireIds.length - 1, Math.max(0, at + step[e.key]))] ?? null);
+    } else if (e.key === "Home" || e.key === "End") {
+      e.preventDefault();
+      moveWireTo(e.key === "Home" ? (wireIds[0] ?? null) : (wireIds[wireIds.length - 1] ?? null));
+    }
+  };
+
   const compRows = useMemo(
     () =>
       model.comps.map((c) => {
@@ -121,16 +151,46 @@ export function CanvasA11y() {
     [model, labels, pins, paramsOf, design, stoppedAt, selection.comps],
   );
 
+  /* 连接表整张表只占一个 Tab 停靠点（和元件清单一样）：一根线三个按钮的话，
+     一百根线就是一百二十个停靠点，键盘用户永远走不到表下面的诊断。所以行内
+     只留一个"选中这根线"的按钮，断开／改接做成表下方的动作按钮，念得出对端
+     名字，作用于当前停住的那一行。 */
   const wireRows = useMemo(
     () =>
-      model.wires.map((w) => (
-        <tr key={w.id}>
-          <td>{endName(w.from, labels)}</td>
-          <td>{endName(w.to, labels)}</td>
-        </tr>
-      )),
-    [model, labels],
+      model.wires.map((w) => {
+        const a = endName(w.from, labels);
+        const b = endName(w.to, labels);
+        return (
+          <tr key={w.id}>
+            <th scope="row">
+              <button
+                type="button"
+                className="a11y-row"
+                ref={(el) => {
+                  if (el) wireRefs.current.set(w.id, el);
+                  else wireRefs.current.delete(w.id);
+                }}
+                tabIndex={stoppedWire === w.id ? 0 : -1}
+                onFocus={() => setWireFocus(w.id)}
+                onClick={() => setSelection({ comps: [], wires: [w.id] })}
+                onKeyDown={(e) => onWireKey(e, w.id)}
+                aria-pressed={selection.wires.includes(w.id)}
+                aria-describedby="a11y-wire-hint"
+                aria-label={`连线 ${a} 到 ${b}`}
+              >
+                {a}
+              </button>
+            </th>
+            <td>{b}</td>
+          </tr>
+        );
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [model, labels, stoppedWire, selection.wires],
   );
+  const wireEnds = wireOf
+    ? { a: endName(wireOf.from, labels), b: endName(wireOf.to, labels) }
+    : { a: "", b: "" };
 
   /** 用户主动查询：按选区取值，没选就取所有叫得出名字的元件 */
   const readValues = () => {
@@ -175,15 +235,34 @@ export function CanvasA11y() {
       </table>
       <h3>连接表</h3>
       {model.wires.length ? (
-        <table>
-          <thead>
-            <tr>
-              <th scope="col">端点 A</th>
-              <th scope="col">端点 B</th>
-            </tr>
-          </thead>
-          <tbody>{wireRows}</tbody>
-        </table>
+        <>
+          <p id="a11y-wire-hint" className="a11y-hint">
+            方向键在导线之间走，回车选中脚下这一根；下面的动作按钮就作用在它身上。
+          </p>
+          {/* data-keys="local"：这张表自己吃 ↑↓←→，不能同时被 App 的画布快捷键吃掉 */}
+          <table data-keys="local">
+            <thead>
+              <tr>
+                <th scope="col">端点 A</th>
+                <th scope="col">端点 B</th>
+              </tr>
+            </thead>
+            <tbody>{wireRows}</tbody>
+          </table>
+          {/* 改接＝先拆后接：把某一端留在手上，再去未连接端口清单点新端点。
+              按钮名里带对端名字，听一遍就知道按下去会拆掉哪根、从哪端重新出线。 */}
+          <div className="a11y-wire-ops">
+            <button type="button" disabled={!wireOf} onClick={() => wireOf && deleteWire(wireOf.id)}>
+              断开这根线
+            </button>
+            <button type="button" disabled={!wireOf} onClick={() => wireOf && rewireWire(wireOf.id, "a")}>
+              从 {wireEnds.a} 改接
+            </button>
+            <button type="button" disabled={!wireOf} onClick={() => wireOf && rewireWire(wireOf.id, "b")}>
+              从 {wireEnds.b} 改接
+            </button>
+          </div>
+        </>
       ) : (
         <p>还没有导线。</p>
       )}

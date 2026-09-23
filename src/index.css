@@ -375,13 +375,16 @@ input[type="range"]:focus-visible {
 .a11y-only button {
   margin-top: 10px;
 }
-/* 元件清单里的每一行本身是个按钮（回车/空格把它选到画布上），但排版要接着
+/* 元件清单与连接表的每一行本身是个按钮（回车/空格把它选到画布上），但排版要接着
    当表格行用：抹掉上面那条 margin-top，靠 inset 描边保证焦点环不被面板的
-   overflow:auto 裁掉，选中态除了 aria-pressed 再多一层底色表达。 */
+   overflow:auto 裁掉，选中态除了 aria-pressed 再多一层底色表达。
+   min-height 24 px 是 2.5.8 的最小目标尺寸 —— 连接表也吃这条，所以行数再多
+   也不用担心行高被 padding 压回 21 px。 */
 .a11y-only button.a11y-row {
   display: block;
   width: 100%;
   margin: 0;
+  min-height: 24px;
   padding: 1px 3px;
   border: 0;
   border-radius: 4px;
@@ -425,6 +428,21 @@ input[type="range"]:focus-visible {
 .a11y-ports button.a11y-port[aria-pressed="true"] {
   background: var(--accent-soft);
   color: var(--accent);
+}
+/* 连接表下方的动作条：整排随宽度换行，禁用态要说得清"为什么按不动"
+   （没有停住的行时才禁用，光标停在表上就有名字可读）。 */
+.a11y-wire-ops {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.a11y-wire-ops button {
+  margin-top: 6px;
+  min-height: 24px;
+}
+.a11y-wire-ops button:disabled {
+  color: var(--dim);
+  cursor: not-allowed;
 }
 .canvas {
   width: 100%;

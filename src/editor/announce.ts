@@ -82,6 +82,9 @@ function selLine(f: AnnounceFacts) {
 
 const linkRef = (l: { from: string; to: string }) => `${l.from}>${l.to}`;
 
+const pendingLine = (f: AnnounceFacts) =>
+  `连线起点已选 ${endName(f.wire.pending!, f.labels)}：再点一个端口完成连线，按 Esc 取消`;
+
 /**
  * 连线这一路要回答三个问题：线头现在在谁手上、这根线落下去没有、断掉的是哪根。
  * 起点→终点是在同一次操作里连续翻的（pending 消失 + 多出一根线），所以先看差集
@@ -98,9 +101,12 @@ function wireLine(f: AnnounceFacts, prev: { pending: string | null; links: strin
   const removed = prev.links.filter((r) => !next.includes(r));
   if (added.length === 1) return `已接好一根线：${spoken(added[0])}`;
   if (added.length > 1) return `已接好 ${added.length} 根线：${spoken(added[0])}`;
+  /* 断线和一个新起点同时出现＝改接：只说"已断开"，用户不知道手上还攥着线头，
+     下一口回车会把他以为已经拆掉的那一端接回去。两句并成一句先讲结果再讲下一步。 */
+  if (removed.length === 1 && f.wire.pending) return `已拆下 ${spoken(removed[0])}；${pendingLine(f)}`;
   if (removed.length === 1) return `已断开一根线：${spoken(removed[0])}`;
   if (removed.length > 1) return `已断开 ${removed.length} 根线`;
-  if (f.wire.pending) return `连线起点已选 ${name(f.wire.pending)}：再点一个端口完成连线，按 Esc 取消`;
+  if (f.wire.pending) return pendingLine(f);
   /* 只清掉起点、线一根没多：可能是按了 Esc，也可能是这一接被拒（端点在这个电路里
      接不上，或这一对本来就有线）。三种情况对用户的结论相同——没有新线接上。 */
   if (prev.pending) return "连线已取消：没有新线接上";

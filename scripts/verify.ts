@@ -1426,6 +1426,84 @@ ok:
       );
     }
 
+    /* 改接：已经接好的那根线也要能在键盘上挪走。这里走真 store，因为
+     * "拆线 + 把起点留在手上 = 一步撤销"这种原子性只有状态机本身能证明；
+     * 拆成 deleteWire + startWire 的话，撤销一次会放回线、线头却还挂着。 */
+    {
+      const { useEditor } = await import("../src/editor/store.ts");
+      const { Simulator } = await import("../src/core/sim.ts");
+      const rb = new CircuitBuilder();
+      const rs = rb.add("input", 0, 0, { bitWidth: 1 }, { name: "源" });
+      const r1 = rb.add("and", 3, 0, {}, { name: "与一" });
+      const r2 = rb.add("and", 6, 0, {}, { name: "与二" });
+      rb.link([[rs, "out", r1, "i0"]]);
+      const seed: Design = JSON.parse(JSON.stringify({ name: "rewire", root: rb.build(), defs: [] }));
+      /* 每次都要换新的一份：mutate 是原地改 design.root 的，撤销之后再塞回同一份
+         对象，线早就被上一步改没了 —— 克隆才叫回到开局。 */
+      const put = () => {
+        const fresh: Design = JSON.parse(JSON.stringify(seed));
+        useEditor.setState({
+          design: fresh,
+          view: "root",
+          sim: new Simulator(fresh, fresh.root),
+          simRev: 0,
+          selection: { comps: [], wires: [] },
+          pendingWire: null,
+          undo: [],
+          redo: [],
+        } as any);
+      };
+      put();
+      const st = () => useEditor.getState();
+      /* 撤销会换掉整个 design 对象，所以读线必须读 store 里那份，不能攥着 rd */
+      const links = () => st().circuit().wires.map((w) => `${w.a.comp}.${w.a.pin}>${w.b.comp}.${w.b.pin}`);
+      const wid = () => st().circuit().wires[0]?.id;
+      const original = `${rs}.out>${r1}.i0`;
+      check("改接: 开局就有一根线可挪", links().join(",") === original, links().join(","));
+      st().rewireWire(wid()!, "a");
+      check(
+        "改接: 线拆掉了，起点留在手上等着接下一处",
+        links().length === 0 && st().pendingWire?.comp === rs && st().pendingWire?.pin === "out",
+        `${JSON.stringify(links())} / pending=${JSON.stringify(st().pendingWire)}`,
+      );
+      check("改接: 只推一步历史", st().undo.length === 1, `${st().undo.length} 步`);
+      st().undoAction();
+      check(
+        "改接: 撤销一次回到改接之前，线回来且线头不悬空",
+        links().join(",") === original && st().pendingWire === null,
+        `${JSON.stringify(links())} / pending=${JSON.stringify(st().pendingWire)}`,
+      );
+      st().redoAction();
+      check("改接: 重做同样不留下悬空线头", links().length === 0 && st().pendingWire === null, JSON.stringify(st().pendingWire));
+      put();
+      st().rewireWire(wid()!, "a");
+      st().startWire({ comp: r2, pin: "i0" });
+      check(
+        "改接: 拆完在新端点落一手，就真接过去了",
+        links().join(",") === `${rs}.out>${r2}.i0` && st().pendingWire === null,
+        JSON.stringify(links()),
+      );
+      put();
+      st().startWire({ comp: rs, pin: "out" });
+      /* 撤销栈里得先有东西：空栈时 undoAction 直接 return，测不到"收线头"这一步 */
+      st().pushHistory("放置元件");
+      const beforeHang = st().undo.length;
+      st().undoAction();
+      check(
+        "撤销: 换电路时把挂着的线头一起收掉，不留半根橡皮筋",
+        st().pendingWire === null && st().undo.length === beforeHang - 1,
+        `${JSON.stringify(st().pendingWire)} / ${st().undo.length} 步`,
+      );
+      put();
+      const beforeMiss = st().undo.length;
+      st().rewireWire("w-not-here", "a");
+      check(
+        "改接: 那根线已经不在了就整个不动，不推空历史",
+        st().undo.length === beforeMiss && st().pendingWire === null && links().length === 1,
+        `${st().undo.length} 步 / ${JSON.stringify(links())}`,
+      );
+    }
+
 
     const fixed = new CircuitBuilder();
     const b1 = fixed.add("input", 0, 0, { bitWidth: 4 }, { name: "总线" });
@@ -1575,6 +1653,17 @@ ok:
       "AN: 只改起点所在元件的名字，不重复播报连线",
       speak({ ...named, wire: { pending: "c1.out", links: [] }, labels: new Map([["c1", "A 改名"], ["c2", "进位链"]]) }, seenStart) === "",
     );
+
+    /* 改接是一步动作：拆一根线和一个新起点同时出现。只报"已断开一根线"，人不知道
+     * 线头还在手上，下一口回车就把刚拆掉的那一端接回原处 —— 两句必须并成一句。 */
+    const [rewireSay, seenRewire] = step({ ...named, wire: { pending: "c1.out", links: [] } }, seenLand);
+    check(
+      "AN: 改接把「拆了哪根」和「起点在谁手上」并成一句",
+      /已拆下 A\.out → 进位链\.i0/.test(rewireSay) && /连线起点已选 A\.out/.test(rewireSay) && !/已断开一根线/.test(rewireSay),
+      rewireSay,
+    );
+    const [rewireBackSay] = step(named, seenRewire);
+    check("AN: 改接半途反悔要说清没接上，不许冒充接回去了", /没有新线接上/.test(rewireBackSay), rewireBackSay);
 
     /* 一次只播一句：判题 > 保存 > 运行 > 连线 > 选区。删一段电路会同时改动连线
      * 与选区，先说断了几根线，选区那句留到下一轮补上。 */
@@ -2492,8 +2581,14 @@ ok:
     check("GATE: 走访用到的键都在（方向键 + Home / End）", /ArrowDown: "next", ArrowRight: "next", ArrowUp: "prev", ArrowLeft: "prev"/.test(vc) && /e\.key === "Home"/.test(vc) && /e\.key === "End"/.test(vc));
     check("GATE: 焦点元件被删掉时退回第一个，清单不会失去停靠点", /focusId && model\.comps\.some/.test(vc));
     check("GATE: 行按钮不吃 .a11y-only button 的 margin，焦点环不被裁掉", /\.a11y-only button\.a11y-row\s*\{[^}]*margin: 0/.test(css) && /outline-offset: -2px/.test(css));
+    /* 24×24 是 2.5.8 的最小目标尺寸：元件行、导线行和表下方那排动作都得达标，
+       差 3 px 肉眼看不出，键盘／头戴指点用户点起来是另一回事。 */
+    check(
+      "GATE: 清单行与连接表动作都到 24px 命中高度",
+      /\.a11y-only button\.a11y-row\s*\{[^}]*min-height: 24px/.test(css) && /\.a11y-wire-ops button\s*\{[^}]*min-height: 24px/.test(css),
+    );
     check("GATE: 无调用方的 updateFocus 已删除，不再留假入口", !/updateFocus/.test(a11yCode) && !/updateFocus/.test(vc));
-    check("GATE: 手册把方向键走访与回车选中写在按键表里", /↑ ↓ ← → \/ Home \/ End/.test(helpCode) && /走访元件/.test(helpCode));
+    check("GATE: 手册把方向键走访与回车选中写在按键表里", /↑ ↓ ← → \/ Home \/ End/.test(helpCode) && /(元件清单|连接表)[\s\S]{0,24}走访/.test(helpCode));
 
     /* GATE: 端口选择器的接线 —— 上面那 4 条行为测试证明"两个落点按两次就落线"
      * 在 store 层成立，但界面要是把它退回成一列纯文本（或按下去只选不连），
@@ -2545,13 +2640,51 @@ ok:
      * 现象都是"游标走了一格，电路也被搬了一格"，只有实跑才会露出来。 */
     const appSrc = strip("../src/App.tsx");
     const a11ySrc = strip("../src/editor/CanvasA11y.tsx");
+    const storeSrc = strip("../src/editor/store.ts");
     check("GATE: 画布快捷键让位于声明了自己吃按键的区域", /\[data-keys='local'\]/.test(appSrc));
-    check("GATE: 元件清单与波形清单都声明了自己吃按键", /<table data-keys="local">/.test(a11ySrc) && /className="wave-list" data-keys="local"/.test(watch));
+    check(
+      "GATE: 三块清单都声明了自己吃按键（元件、连接表、波形）",
+      (a11ySrc.match(/<table data-keys="local">/g) ?? []).length === 2 &&
+        /className="wave-list" data-keys="local"/.test(watch),
+    );
     check(
       "GATE: 声明范围只圈清单，不圈整个可访问视图（否则读值按钮上的方向键会失去单步）",
-      /<section className="a11y-only"[^>]*>/.test(a11ySrc) && (a11ySrc.match(/data-keys/g) ?? []).length === 1,
+      /<section className="a11y-only"[^>]*>/.test(a11ySrc) && (a11ySrc.match(/data-keys/g) ?? []).length === 2,
     );
-    check("GATE: 手册把两块清单的按键域写进说明", /元件清单或波形清单里时同样不生效/.test(watch));
+    check("GATE: 手册把三块清单的按键域写进说明", /元件清单、连接表或波形清单里时同样不生效/.test(watch));
+
+    /* doc 02 §9 的最后一块：把一根已经接好的线挪走。三个动作必须都作用在
+     * "停住的那一行"上，而不是各点各的 —— 一根线给三个按钮的话，一百根线
+     * 就走不完这张表，所以整张表只留一个 Tab 停靠点。 */
+    check(
+      "GATE: 连接表带断开与改接，且都作用在停住的那根线",
+      /deleteWire\(wireOf\.id\)/.test(a11ySrc) && /rewireWire\(wireOf\.id, "a"\)/.test(a11ySrc) && /rewireWire\(wireOf\.id, "b"\)/.test(a11ySrc),
+    );
+    check(
+      "GATE: 连接表整张只有一个 Tab 停靠点，方向键在导线之间走",
+      /tabIndex=\{stoppedWire === w\.id \? 0 : -1\}/.test(a11ySrc) && /moveWireTo\(wireIds\[/.test(a11ySrc),
+    );
+    check("GATE: 动作按钮在没有停住的行时禁用，不让人按出 undefined", /disabled=\{!wireOf\}/.test(a11ySrc));
+    check("GATE: 改接是一个动作（一次历史），不是拆成删除＋挂起点两步", /pushHistory\("改接导线"\)[\s\S]{0,200}pendingWire: from/.test(storeSrc));
+    check(
+      "GATE: 撤销与重做各自都要收掉悬着的线头",
+      (() => {
+        /* 分开量两条实现：只数整段里的出现次数，删掉 redoAction 那一侧、
+           在 undoAction 里多写一句就能凑够数。锚点也要找实现，
+           接口声明里同样写着 undoAction()，从那儿切只会切到声明区。 */
+        const cut = (from: string, to: string) => {
+          const a = storeSrc.indexOf(from);
+          const b = storeSrc.indexOf(to);
+          /* 锚点找不到就返回空串：slice 的负数下标会从尾部切，反而"什么都还在" */
+          return a >= 0 && b > a ? storeSrc.slice(a, b) : "";
+        };
+        return (
+          /pendingWire: null/.test(cut("undoAction() {", "redoAction() {")) &&
+          /pendingWire: null/.test(cut("redoAction() {", "beginTransaction(label) {"))
+        );
+      })(),
+    );
+    check("GATE: 手册写了改接怎么走", /「从 X 改接」[\s\S]{0,120}未连接端口清单/.test(watch));
     /* 叫法只能有一处定义：可访问清单、连线播报、属性面板 chip 说的是同一个元件，
      * 各写一套兜底就会出现"清单里叫输入、播报里叫一串 id"。 */
     const insp = strip("../src/editor/Inspector.tsx");

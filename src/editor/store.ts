@@ -146,6 +146,11 @@ export interface EditorState {
   /** 连线：引脚对不上号或重复连接会被拒绝，返回是否成功 */
   addWire(a: PinRef, b: PinRef, via?: Point[]): boolean;
   deleteWire(id: string): void;
+  /**
+   * 改接：拆掉一根线，把 keep 那一端留在手上作新起点。
+   * 必须是一个动作 —— 拆成 deleteWire + startWire 就是两步撤销。
+   */
+  rewireWire(id: string, keep: "a" | "b"): void;
   addViaOnWire(id: string, at: Point): void;
 
   copy(): void;
@@ -509,7 +514,14 @@ export const useEditor = create<EditorState>((set, get) => {
       const last = st.undo[st.undo.length - 1];
       if (!last) return;
       const current: Snapshot = { design: cloneDesign(st.design), label: "重做" };
-      set({ undo: st.undo.slice(0, -1), redo: [...st.redo, current], selection: { comps: [], wires: [] } });
+      /* 线被整个换回去了：攥着的起点可能指向已经不存在的引脚，改接后撤销更是会把
+         刚拆下的那根线又接回原处。和选区一样清掉，让撤销回到"没有半成品"。 */
+      set({
+        undo: st.undo.slice(0, -1),
+        redo: [...st.redo, current],
+        selection: { comps: [], wires: [] },
+        pendingWire: null,
+      });
       replace(last.design, st.view);
     },
     redoAction() {
@@ -517,7 +529,12 @@ export const useEditor = create<EditorState>((set, get) => {
       const last = st.redo[st.redo.length - 1];
       if (!last) return;
       const current: Snapshot = { design: cloneDesign(st.design), label: "撤销" };
-      set({ redo: st.redo.slice(0, -1), undo: [...st.undo, current], selection: { comps: [], wires: [] } });
+      set({
+        redo: st.redo.slice(0, -1),
+        undo: [...st.undo, current],
+        selection: { comps: [], wires: [] },
+        pendingWire: null,
+      });
       replace(last.design, st.view);
     },
     beginTransaction(label) {
@@ -706,6 +723,25 @@ export const useEditor = create<EditorState>((set, get) => {
         c.wires = c.wires.filter((w) => w.id !== id);
       }, "删除导线");
       set((s) => ({ selection: { comps: s.selection.comps, wires: s.selection.wires.filter((x) => x !== id) } }));
+    },
+    rewireWire(id, keep) {
+      const st = get();
+      const wire = st.circuit().wires.find((w) => w.id === id);
+      if (!wire) return;
+      /* 一次 pushHistory + 一次 mutate：撤销回到改接之前时，线和起点要一起回来。
+         起点用克隆出来的对象，别把电路里那份引用攥在手上。 */
+      const from = { ...wire[keep] };
+      st.pushHistory("改接导线");
+      mutate(
+        (c) => {
+          c.wires = c.wires.filter((w) => w.id !== id);
+        },
+        "改接导线",
+      );
+      set((s) => ({
+        pendingWire: from,
+        selection: { comps: s.selection.comps, wires: s.selection.wires.filter((x) => x !== id) },
+      }));
     },
     addViaOnWire(id, at) {
       const st = get();
