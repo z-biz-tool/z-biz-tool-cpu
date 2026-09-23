@@ -1784,7 +1784,8 @@ ok:
   if (existsSync2(manifestPath2)) {
     (globalThis as any).__manifest = readFileSync2(manifestPath2, "utf8");
   }
-  const atResults = atModule.runAllAT();
+  // AT-01 要拿「本轮已经跑出来的项数」当证据，所以把实时计数器传进去
+  const atResults = atModule.runAllAT({ passed, failed });
   let atPass = 0;
   let atFail = 0;
   for (const r of atResults) {

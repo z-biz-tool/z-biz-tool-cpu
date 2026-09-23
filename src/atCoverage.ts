@@ -5,15 +5,21 @@
  * ------------------------------------------------------------------ */
 
 import { assemble } from "./asm/assembler.ts";
+import { SAMPLES } from "./asm/samples.ts";
 import { Simulator } from "./core/sim.ts";
 import type { Design } from "./core/types.ts";
 import { referenceCpu } from "./cpu/reference.ts";
 import { newInterpreter, runToHalt, loadProgram } from "./cpu/interpreter.ts";
 import { validateProjectFile } from "./project/validate.ts";
-import { LEVELS, levelDesign } from "./challenges/levels.ts";
+import { LEVELS, levelDesign, solutionDesign } from "./challenges/levels.ts";
 import { runLevelTests } from "./challenges/verify.ts";
 import { buildHitIndex, hitTest } from "./editor/hitIndex.ts";
 import { buildA11y } from "./editor/a11y.ts";
+import { parseManifest, validateCatalog } from "./courses/manifest.ts";
+import { validateCommand, validateResponse } from "./workers/protocol.ts";
+import type { SimClientBackend, ClientEvents } from "./workers/client.ts";
+import type { WorkerRequest, WorkerResponse } from "./workers/protocol.ts";
+import { SimClient } from "./workers/client.ts";
 
 export interface ATResult {
   id: string;
@@ -25,9 +31,31 @@ function t(id: string, ok: boolean, detail = ""): ATResult {
   return { id, ok, detail };
 }
 
-/* AT-01 由 verify.ts 全套覆盖 */
-export function at01(): ATResult {
-  return t("AT-01", true, "由 verify.ts 全套 123 项覆盖");
+/* AT-01 基线与工程环境（doc 07 §2）：清单齐不齐、缺项会不会被当成通过。
+ * 不接受「别的套件说过了」这种证据 —— 这里只看自己能测到的东西。 */
+export function at01(ctx: { passed: number; failed: number } = { passed: 0, failed: 0 }): ATResult {
+  const issues: string[] = [];
+  if (LEVELS.length !== 31) issues.push(`关卡 ${LEVELS.length}≠31`);
+
+  const noSolution = LEVELS.filter((l) => !solutionDesign(l)).map((l) => l.id);
+  if (noSolution.length) issues.push(`缺参考解答 ${noSolution.length} 关(${noSolution.slice(0, 3).join(",")})`);
+
+  // 故障注入：拿裸骨架去判题，31 关一关都不许通过
+  const faked = LEVELS.filter((l) => runLevelTests(l, levelDesign(l)).pass).map((l) => l.id);
+  if (faked.length) issues.push(`骨架冒充通过 ${faked.length} 关(${faked.slice(0, 3).join(",")})`);
+
+  if (SAMPLES.length < 7) issues.push(`示例程序 ${SAMPLES.length}<7`);
+  const badSample = SAMPLES.filter((s) => assemble(s.source).errors.length).map((s) => s.key);
+  if (badSample.length) issues.push(`示例程序汇编失败 ${badSample.join(",")}`);
+
+  if (ctx.failed) issues.push(`自检有 ${ctx.failed} 项失败`);
+  if (!ctx.passed) issues.push("自检一项结果都没有");
+
+  return t(
+    "AT-01",
+    !issues.length,
+    issues.join("; ") || `31 关均有解答且骨架 0 通过，${SAMPLES.length} 个示例程序可汇编，自检 ${ctx.passed} 项全绿`,
+  );
 }
 
 /* AT-02：损坏输入有界终止 */
@@ -123,13 +151,65 @@ export function at06(): ATResult {
   return t("AT-06", v.ok, v.ok ? "schema 通过" : v.issues.map((i) => i.msg).join(";"));
 }
 
-/* AT-07：Worker 协议校验 */
+/* AT-07：Worker 协议与过期响应（doc 07 §2「旧响应无效；不伪报通过」）
+ * 这里跑的是真的 SimClient + validateCommand/validateResponse，不再另写一份判定。 */
 export function at07(): ATResult {
-  // 直接复刻 validateCommand 的核心判定
-  const known = new Set(["compile", "setInput", "step", "run", "pause", "reset", "snapshot", "restore", "subscribeTrace", "dispose"]);
-  const v1 = known.has("step");
-  const v2 = known.has("nonsense");
-  return t("AT-07", v1 && !v2, `step OK=${v1}; unknown 拒绝=${!v2}`);
+  const issues: string[] = [];
+  const base = { requestId: "r1", sessionId: "s1", designRevision: 5 };
+  if (!validateCommand({ ...base, command: "step" })) issues.push("已知命令被拒");
+  if (validateCommand({ ...base, command: "drop-table" })) issues.push("未知命令通过");
+  if (validateCommand({ ...base, command: "step", designRevision: "5" })) issues.push("revision 类型没校验");
+  if (validateCommand(null)) issues.push("null 命令通过");
+  if (!validateResponse({ ...base, sequence: 1, type: "result" })) issues.push("合法响应被拒");
+  if (validateResponse({ ...base, sequence: 1, type: "maybe" })) issues.push("未知响应类型通过");
+
+  // 假 backend：只记录发出的命令，回包由测试这边决定
+  class EchoBackend implements SimClientBackend {
+    sent: WorkerRequest[] = [];
+    private handler: ((r: WorkerResponse) => void) | null = null;
+    post(req: WorkerRequest) {
+      this.sent.push(req);
+    }
+    onResponse(h: (r: WorkerResponse) => void) {
+      this.handler = h;
+    }
+    emit(resp: WorkerResponse) {
+      this.handler?.(resp);
+    }
+  }
+  const backend = new EchoBackend();
+  const got: number[] = [];
+  const events: ClientEvents = { onResult: (r) => got.push(r.tick) };
+  const client = new SimClient(backend, { sessionId: "s1", revision: 5 });
+  client.setEvents(events);
+  client.step(1);
+  if (backend.sent.length !== 1 || backend.sent[0].command !== "step") issues.push("命令没按协议发出");
+
+  // 上一版设计的回包：既不能进 UI，也不能污染 latestResult
+  backend.emit({ requestId: "r1", sessionId: "s1", designRevision: 4, sequence: 1, type: "result", payload: { tick: 4 } });
+  if (got.length || client.result()) issues.push("旧 revision 的响应被当成当前结果");
+  // 别的 session 的回包
+  backend.emit({ requestId: "r1", sessionId: "other", designRevision: 5, sequence: 2, type: "result", payload: { tick: 5 } });
+  if (got.length) issues.push("接受了别家 session 的回包");
+  // 当前版本
+  backend.emit({ requestId: "r1", sessionId: "s1", designRevision: 5, sequence: 3, type: "result", payload: { tick: 6 } });
+  if (got.length !== 1 || client.result()?.tick !== 6) issues.push("当前 revision 的响应没送到 UI");
+  // 切项目：旧版本号整段作废，之后就算再回也无效
+  client.bumpRevision(7);
+  backend.emit({ requestId: "r1", sessionId: "s1", designRevision: 5, sequence: 4, type: "result", payload: { tick: 8 } });
+  if (got.length !== 1) issues.push("切版本后旧响应仍然生效");
+  // 版本号会被复用（撤销 / 重做回到同一 revision）：回到这一版后新回包必须能进 UI，
+  // 否则界面永远停在旧结果。同一版号在飞时的旧回包与新版无法只靠版号区分，不强测。
+  client.bumpRevision(5);
+  backend.emit({ requestId: "r1", sessionId: "s1", designRevision: 5, sequence: 5, type: "result", payload: { tick: 10 } });
+  if (got.length !== 2 || client.result()?.tick !== 10) issues.push("撤销标记挡住了复用后的新回包");
+  // 出错回包必须显式上报，不能悄悄当成功
+  let err = "";
+  client.setEvents({ ...events, onError: (e) => (err = e.message) });
+  backend.emit({ requestId: "r1", sessionId: "s1", designRevision: 5, sequence: 7, type: "error", payload: { message: "编译炸了" } });
+  if (err !== "编译炸了") issues.push("错误回包没上报");
+
+  return t("AT-07", !issues.length, issues.join("; ") || "协议校验 + 过期/别家/错误回包均按预期");
 }
 
 /* AT-08：短脉冲保留（step 内部 captureTraceEndOfTick 抓所有已命名元件） */
@@ -182,15 +262,24 @@ export function at10(): ATResult {
   return t("AT-10", ok >= ops.length - 1 && bigInterp.fault === undefined, `指令 ${ok}/${ops.length}, 超界不崩溃`);
 }
 
-/* AT-11：课程 manifest */
+/* AT-11：课程 manifest —— 没构建出清单就是没证据，不能算通过 */
 export function at11(): ATResult {
-  const m = JSON.parse((globalThis as any).__manifest ?? "{}") as any;
-  if (!m.levels) return t("AT-11", true, "由 buildCatalog 校验保证");
-  const ids = new Set<string>();
-  let dup = 0;
-  for (const p of m.prologues ?? []) if (ids.has(p.id)) dup++; else ids.add(p.id);
-  for (const l of m.levels ?? []) if (ids.has(l.id)) dup++; else ids.add(l.id);
-  return t("AT-11", dup === 0 && (m.levels?.length ?? 0) === 31, `ID 重复=${dup}, levels=${m.levels?.length ?? "?"}`);
+  const raw = (globalThis as any).__manifest as string | undefined;
+  if (!raw) return t("AT-11", false, "缺 dist-curriculum/manifest.json，先跑 npm run build:curriculum");
+  const parsed = parseManifest(raw);
+  if (!parsed.ok) return t("AT-11", false, "清单解析失败: " + parsed.errors.slice(0, 3).join(";"));
+  const m = parsed.manifest;
+  const v = validateCatalog(m);
+  if (!v.ok) return t("AT-11", false, "清单校验失败: " + v.issues.slice(0, 3).map((i) => i.path + " " + i.msg).join(";"));
+  // ID 无丢失、无重复：清单里的关卡要和代码里的 LEVELS 一一对上
+  const catalogIds = new Set(m.levels.map((l) => l.id));
+  const missing = LEVELS.filter((l) => !catalogIds.has(l.id)).map((l) => l.id);
+  const extra = [...catalogIds].filter((id) => !LEVELS.some((l) => l.id === id));
+  const issues: string[] = [];
+  if (missing.length) issues.push(`清单丢了 ${missing.join(",")}`);
+  if (extra.length) issues.push(`清单多出 ${extra.join(",")}`);
+  if (m.prologues.length !== 3) issues.push(`序章 ${m.prologues.length}≠3`);
+  return t("AT-11", !issues.length, issues.join("; ") || `${m.levels.length} 关 + ${m.prologues.length} 序章，ID 对得上且先修图无环`);
 }
 
 /* AT-12：a11y / 性能基座 */
@@ -202,6 +291,6 @@ export function at12(): ATResult {
   return t("AT-12", idx.comps.length === cpu.design.root.comps.length && a11y.comps.length > 0 && hit !== undefined, `comps=${idx.comps.length} a11y=${a11y.comps.length} hit=${!!hit}`);
 }
 
-export function runAllAT(): ATResult[] {
-  return [at01(), at02(), at03(), at04(), at05(), at06(), at07(), at08(), at09(), at10(), at11(), at12()];
+export function runAllAT(ctx: { passed: number; failed: number } = { passed: 0, failed: 0 }): ATResult[] {
+  return [at01(ctx), at02(), at03(), at04(), at05(), at06(), at07(), at08(), at09(), at10(), at11(), at12()];
 }

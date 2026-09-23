@@ -168,9 +168,11 @@ export class SimClient {
     return this.send("dispose");
   }
 
-  /** 切换到新版本（撤销旧版响应） */
+  /** 切换到新版本（撤销旧版响应）；撤销标记只针对离开的版本，
+   *  撤销 / 重做回到同一个 revision 号时要把这一版放行，否则界面永远停在旧结果 */
   bumpRevision(next: number) {
     this.revokedRevisions.add(this.revision);
+    this.revokedRevisions.delete(next);
     this.revision = next;
   }
 
