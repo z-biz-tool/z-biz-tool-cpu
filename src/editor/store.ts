@@ -18,7 +18,7 @@ import { assemblesSample } from "../asm/samples.ts";
 import { DebouncedSaver, nextSaveState } from "../project/saveState.ts";
 import type { SaveState } from "../project/saveState.ts";
 import type { WorkshopState } from "../workshop/index.ts";
-import { addOrUpdate, findComponent, loadWorkshopLocal, removeVersion, saveWorkshopLocal } from "../workshop/index.ts";
+import { addOrUpdate, findComponent, lacksMeta, loadWorkshopLocal, removeVersion, saveWorkshopLocal } from "../workshop/index.ts";
 
 /* ------------------------------------------------------------------ *
  * 编辑器状态中枢：设计数据 + 仿真器 + 视图 + 关卡 + 汇编
@@ -93,6 +93,8 @@ export interface EditorState {
   asmListing: ListingLine[];
   /** IMP-13：作品工坊（本地持久化） */
   workshop: WorkshopState;
+  /** doc 05 §4：刚封装完、等着补名称说明与端口说明的子电路 */
+  pendingMeta: { defId: string } | null;
   /** doc 02 §5.3：草稿落盘状态，独立于运行状态 */
   save: SaveState;
 
@@ -192,6 +194,17 @@ export interface EditorState {
   publishToWorkshop(def: CustomDef, source?: "user" | "course" | "imported"): boolean;
   /** 覆盖工坊状态（导入备份用），自动写本地存储 */
   replaceWorkshop(next: WorkshopState): void;
+  /** doc 05 §4：给某个封装补名称 / 说明 / 逐端口说明；不改电路所以不产生新版本 */
+  setPackageMeta(
+    defId: string,
+    meta: { title: string; description: string; ports: Record<string, string> }
+  ): boolean;
+  /** 关掉补全面板：组件留在工坊里，缺口由 needsMeta 如实报出 */
+  dismissPackageMeta(): void;
+  /** 重新打开某个封装的补全面板（先跳过后要有回来的路） */
+  openPackageMeta(defId: string): void;
+  /** 该封装还缺说明或端口说明吗（导入的旧封装据此标为「待完善元数据」） */
+  needsMeta(defId: string): boolean;
   /** 删除某个组件版本；同 id 若还有更早版本则把它恢复为「当前」 */
   removeWorkshopVersion(id: string, version: number): void;
   /** 把工坊组件放到画布中心；当前设计缺少该子电路时先登记 */
@@ -306,7 +319,8 @@ export const useEditor = create<EditorState>((set, get) => {
     const st = get();
     const v = view === "root" || design.defs.some((d) => d.id === view) ? view : "root";
     sim = new Simulator(design, currentCircuit(design, v));
-    set({ design, view: v, sim, tick: st.tick + 1, simRev: st.simRev + 1, result: null });
+    // 整份设计被换掉（读档 / 新建 / 切关 / 撤销）时，补全面板里那个 defId 已经没有意义
+    set({ design, view: v, sim, tick: st.tick + 1, simRev: st.simRev + 1, result: null, pendingMeta: null });
     touchDraft();
   };
 
@@ -344,6 +358,7 @@ export const useEditor = create<EditorState>((set, get) => {
     save: bootedFromDraft
       ? { label: "saved", savedRevision: 0, currentRevision: 0 }
       : { label: "unsaved", savedRevision: 0, currentRevision: 0 },
+    pendingMeta: null,
 
     circuit() {
       const st = get();
@@ -864,7 +879,8 @@ export const useEditor = create<EditorState>((set, get) => {
       after("打包子电路", false);
       // IMP-13: 封装即入工坊（内容变化会自动升版本）
       get().publishToWorkshop(def);
-      set({ selection: { comps: [newId], wires: [] } });
+      // doc 05 §4: 新封装要落名字与端口说明，紧接着开补全面板（不再用 window.prompt）
+      set({ selection: { comps: [newId], wires: [] }, pendingMeta: { defId } });
       return defId;
     },
     enterView(view) {
@@ -1042,6 +1058,35 @@ export const useEditor = create<EditorState>((set, get) => {
     replaceWorkshop(next) {
       saveWorkshopLocal(next);
       set({ workshop: next });
+    },
+    setPackageMeta(defId, meta) {
+      const cur = findComponent(get().workshop, defId);
+      if (!cur) return false;
+      // 补元数据不改电路，也就不改内容哈希：版本不可变约束的是电路，不是说明文字
+      const draft: WorkshopState = {
+        components: get().workshop.components.map((c) => ({ ...c, interface: c.interface.map((p) => ({ ...p })) })),
+      };
+      const target = findComponent(draft, defId);
+      if (!target) return false;
+      target.title = meta.title;
+      target.description = meta.description;
+      for (const p of target.interface) {
+        const note = meta.ports[p.name];
+        if (note !== undefined) p.description = note;
+      }
+      saveWorkshopLocal(draft);
+      set({ workshop: draft, pendingMeta: null });
+      return true;
+    },
+    dismissPackageMeta() {
+      set({ pendingMeta: null });
+    },
+    openPackageMeta(defId) {
+      set({ pendingMeta: { defId } });
+    },
+    needsMeta(defId) {
+      const m = findComponent(get().workshop, defId);
+      return !!m && lacksMeta(m);
     },
     removeWorkshopVersion(id, version) {
       const draft = removeVersion(get().workshop, id, version);

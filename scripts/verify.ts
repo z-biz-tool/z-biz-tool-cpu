@@ -1667,6 +1667,91 @@ ok:
     if (realNav) Object.defineProperty(globalThis, "navigator", realNav);
   }
 
+  /* PM: doc 05 §4 封装元数据。打包即入工坊，但新封装的名称/说明/端口说明必须补齐，
+   * 缺口要能在界面上如实标出来并可事后补全；补说明文字不算改电路，不能升版本。 */
+  {
+    const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+    const store = new Map<string, string>();
+    const ls = {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, v),
+      removeItem: (k: string) => void store.delete(k),
+      key: (i: number) => [...store.keys()][i] ?? null,
+      get length() {
+        return store.size;
+      },
+    };
+    (globalThis as any).window = { localStorage: ls, addEventListener: () => {} };
+    // 工坊走的是裸 localStorage（浏览器里等于 window.localStorage），Node 下得单独挂
+    const realLS = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+    Object.defineProperty(globalThis, "localStorage", { value: ls, configurable: true, writable: true });
+    const { useEditor: pmBase } = await import("../src/editor/store.ts");
+    const wp = await import("../src/workshop/index.ts");
+    const pmTabPath = (t: string) => "../src/editor/store.ts?tab=" + t;
+    const pmTab = (await import(pmTabPath("pm")) as { useEditor: typeof pmBase }).useEditor;
+    const st = () => pmTab.getState();
+    st().newDesign();
+    await wait(50);
+
+    st().placeComp("input", 2, 2);
+    st().placeComp("and", 6, 2);
+    st().placeComp("output", 12, 2);
+    const byType = (t: string) => st().design.root.comps.find((c) => c.type === t)!.id;
+    const [iId, gId, oId] = [byType("input"), byType("and"), byType("output")];
+    const wired =
+      st().addWire({ comp: iId, pin: "out" }, { comp: gId, pin: "i0" }) &&
+      st().addWire({ comp: gId, pin: "out" }, { comp: oId, pin: "in" });
+    check("PM: 选区里有跨界导线可打包", wired, JSON.stringify(st().design.root.wires.length));
+
+    st().setSelection({ comps: [iId, gId], wires: [] });
+    const defId = st().groupSelection("半加器");
+    check("PM: 打包返回新封装 id", !!defId, String(defId));
+    check("PM: 打包后马上要求补全元数据", st().pendingMeta?.defId === defId, JSON.stringify(st().pendingMeta));
+    const mf = () => wp.findComponent(st().workshop, defId!)!;
+    check("PM: 新封装一进工坊就是待完善状态", st().needsMeta(defId!) && wp.lacksMeta(mf()), JSON.stringify(mf()?.interface));
+    check(
+      "PM: 待完善的缺口是说明与逐端口说明",
+      !!mf().title.trim() && !mf().description.trim() && mf().interface.every((p) => !p.description?.trim()),
+      JSON.stringify([mf().title, mf().description, mf().interface.map((p) => p.description)])
+    );
+    // doc 05 §4：元数据缺口不能挡住使用
+    check("PM: 元数据缺口不阻塞放入画布", st().useWorkshopComponent(defId!, mf().version) === true);
+
+    const versionBefore = mf().version;
+    const ports = Object.fromEntries(mf().interface.map((p) => [p.name, p.dir === "in" ? "输入位" : "输出位"]));
+    check(
+      "PM: 缺端口说明时缺口仍在",
+      st().setPackageMeta(defId!, { title: "半加器", description: "一位与逻辑", ports: {} }) && st().needsMeta(defId!),
+      JSON.stringify(mf().interface.map((p) => p.description))
+    );
+    st().openPackageMeta(defId!);
+    check("PM: 从工坊面板能重新打开补全面板", st().pendingMeta?.defId === defId);
+    st().dismissPackageMeta();
+    check(
+      "PM: 关掉面板不等于补全完成",
+      st().pendingMeta === null && st().needsMeta(defId!),
+      JSON.stringify([st().pendingMeta, st().needsMeta(defId!)])
+    );
+    check("PM: 补全接口说明后缺口消除", st().setPackageMeta(defId!, { title: "半加器", description: "一位与逻辑", ports }) && !st().needsMeta(defId!));
+    check("PM: 说明逐条落到对应端口上", mf().interface.every((p) => p.description === (p.dir === "in" ? "输入位" : "输出位")), JSON.stringify(mf().interface));
+    check("PM: 补元数据不升版本", mf().version === versionBefore && st().workshop.components.length === 1, JSON.stringify([mf().version, st().workshop.components.length]));
+    const saved = JSON.parse(store.get("cpu-workshop-v1") ?? "{}");
+    check(
+      "PM: 补全后的说明已落本地存储",
+      saved.components?.[0]?.description === "一位与逻辑" &&
+        saved.components?.[0]?.interface?.every((p: { description?: string }) => !!p.description?.trim()),
+      store.get("cpu-workshop-v1") ?? ""
+    );
+    st().openPackageMeta(defId!);
+    st().newDesign();
+    check("PM: 整份设计被换掉时补全面板跟着收起", st().pendingMeta === null, JSON.stringify(st().pendingMeta));
+    check("PM: 未知封装不会被误判为已完善", st().needsMeta("d-none") === false && st().setPackageMeta("d-none", { title: "x", description: "y", ports: {} }) === false);
+
+    delete (globalThis as any).window;
+    if (realLS) Object.defineProperty(globalThis, "localStorage", realLS);
+    else delete (globalThis as any).localStorage;
+  }
+
   // AT-01..AT-12 全验收矩阵
   const atModule = await import("../src/atCoverage.ts");
   const { existsSync: existsSync2, readFileSync: readFileSync2 } = await import("node:fs");

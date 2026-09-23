@@ -1,7 +1,7 @@
 import { Alert, Button, Popconfirm, Space, Table, Tag, Tooltip, Upload } from "antd";
 import { useState } from "react";
 import type { ComponentManifest } from "../../workshop/index.ts";
-import { diffInterface, exportWorkshop, importWorkshop } from "../../workshop/index.ts";
+import { diffInterface, exportWorkshop, importWorkshop, lacksMeta } from "../../workshop/index.ts";
 import { useEditor } from "../store.ts";
 
 /* ------------------------------------------------------------------ *
@@ -18,6 +18,7 @@ export default function WorkshopPanel() {
   const removeWorkshopVersion = useEditor((s) => s.removeWorkshopVersion);
   const useWorkshopComponent = useEditor((s) => s.useWorkshopComponent);
   const setPanel = useEditor((s) => s.setPanel);
+  const openPackageMeta = useEditor((s) => s.openPackageMeta);
   const [diffId, setDiffId] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ kind: "success" | "warning"; text: string } | null>(null);
 
@@ -102,6 +103,13 @@ export default function WorkshopPanel() {
               render: (v: string, r: ComponentManifest) => (
                 <span>
                   <b>{r.title}</b>
+                  {lacksMeta(r) && (
+                    <Tooltip title="缺名称、说明或端口说明：旧档导入的和当时跳过的都照常可用，只是接口含义只有作者自己清楚">
+                      <Tag color="warning" style={{ marginLeft: 6 }}>
+                        待完善元数据
+                      </Tag>
+                    </Tooltip>
+                  )}
                   <br />
                   <span className="dim">id: {v}</span>
                 </span>
@@ -122,7 +130,7 @@ export default function WorkshopPanel() {
               title: "接口",
               dataIndex: "interface",
               render: (_: unknown, r: ComponentManifest) => (
-                <Tooltip title={r.interface.map((p) => `${p.dir} ${p.name}(${p.width})`).join("、")}>
+                <Tooltip title={r.interface.map((p) => [`${p.dir} ${p.name}(${p.width})`, p.description].filter(Boolean).join(" — ")).join("、")}>
                   <span>{r.interface.length} 个端口</span>
                 </Tooltip>
               ),
@@ -164,6 +172,11 @@ export default function WorkshopPanel() {
                         }}
                       >
                         放入画布
+                      </Button>
+                    )}
+                    {latest?.version === r.version && lacksMeta(r) && (
+                      <Button size="small" onClick={() => openPackageMeta(r.id)}>
+                        补全说明
                       </Button>
                     )}
                     <Popconfirm

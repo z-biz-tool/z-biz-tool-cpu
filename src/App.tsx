@@ -3,6 +3,7 @@ import zhCN from "antd/locale/zh_CN";
 import { useEffect, useMemo } from "react";
 import Canvas from "./editor/Canvas.tsx";
 import Inspector from "./editor/Inspector.tsx";
+import { PackageMetaDialog } from "./editor/PackageMetaDialog.tsx";
 import Palette from "./editor/Palette.tsx";
 import Toolbar from "./editor/Toolbar.tsx";
 import AsmPanel from "./editor/panels/AsmPanel.tsx";
@@ -125,8 +126,8 @@ export default function App() {
         case "g":
         case "G": {
           if (st.selection.comps.length < 2) break;
-          const name = window.prompt("子电路名称", "新子电路");
-          if (name !== null) st.groupSelection(name.trim() || "子电路");
+          // 名称与端口说明由紧接着弹出的补全面板收集（doc 05 §4），这里只起个草稿名
+          st.groupSelection("未命名子电路");
           break;
         }
         case "i":
@@ -181,6 +182,7 @@ export default function App() {
             />
           </aside>
         </div>
+        <PackageMetaDialog />
       </div>
     </ConfigProvider>
   );

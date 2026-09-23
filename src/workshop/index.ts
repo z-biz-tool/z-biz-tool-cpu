@@ -128,6 +128,14 @@ export function manifestToDef(m: ComponentManifest): CustomDef {
 }
 
 /**
+ * doc 05 §4：新封装要写名称与端口说明；旧档 / 跳过的先按「待完善元数据」用着，
+ * 不阻塞打开，但界面上要如实标出来。
+ */
+export function lacksMeta(m: ComponentManifest): boolean {
+  return !m.title?.trim() || !m.description?.trim() || m.interface.some((p) => !p.description?.trim());
+}
+
+/**
  * 删除某个版本并返回新状态（原状态不动）。
  * 若删掉的是该 id 唯一的「当前版」，把剩下的最新版重新指回当前，
  * 否则组件会从工坊里凭空消失。

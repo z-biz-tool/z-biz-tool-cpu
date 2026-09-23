@@ -955,3 +955,41 @@ body {
 .ant-tabs-tab {
   font-size: 12px;
 }
+
+/* 封装元数据补全面板（doc 05 §4） */
+.pkg-field {
+  display: block;
+  margin-bottom: 10px;
+}
+.pkg-field > span {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--dim);
+  font-size: 12px;
+}
+.pkg-ports {
+  border-top: 1px solid var(--edge);
+  padding-top: 8px;
+}
+.pkg-ports-head {
+  color: var(--dim);
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+.pkg-port {
+  display: grid;
+  grid-template-columns: 40px minmax(70px, 1fr) 44px minmax(140px, 2fr);
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.pkg-port-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pkg-port-bits {
+  color: var(--dim);
+  font-family: var(--mono);
+  font-size: 11px;
+}
