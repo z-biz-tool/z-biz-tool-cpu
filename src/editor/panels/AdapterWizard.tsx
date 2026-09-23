@@ -100,7 +100,7 @@ export default function AdapterWizard({ sim, onApply, current }: AdapterWizardPr
         <Alert
           type="info"
           showIcon
-          message="参考 CPU 由系统装配，自动绑定为 PC/IR/标志/8 个寄存器/停机信号；如需换算成用户设计，可切到「用户 CPU 向导」手动填写。"
+          title="参考 CPU 由系统装配，自动绑定为 PC/IR/标志/8 个寄存器/停机信号；如需换算成用户设计，可切到「用户 CPU 向导」手动填写。"
         />
       ) : (
         <>
@@ -129,7 +129,7 @@ export default function AdapterWizard({ sim, onApply, current }: AdapterWizardPr
           type="error"
           showIcon
           style={{ marginTop: 12 }}
-          message="绑定未通过"
+          title="绑定未通过"
           description={<ul className="asm-errors">{errors.map((e) => <li key={e}>{e}</li>)}</ul>}
         />
       )}

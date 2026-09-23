@@ -190,7 +190,7 @@ export default function CpuPanel() {
       </div>
 
       {!!errors.length && (
-        <Alert type="error" showIcon message="程序无法装载" description={<ul className="asm-errors">{errors.map((e) => <li key={e}>{e}</li>)}</ul>} />
+        <Alert type="error" showIcon title="程序无法装载" description={<ul className="asm-errors">{errors.map((e) => <li key={e}>{e}</li>)}</ul>} />
       )}
 
       {snap && (
@@ -266,7 +266,7 @@ export default function CpuPanel() {
           <div className={"cpu-out" + (snap.done ? " done" : "")}>
             {snap.prints.length ? snap.prints.join(" ") : <span className="dim">还没有输出</span>}
           </div>
-          {settle && <Alert type="warning" showIcon message={settle.label} description={settle.detail} />}
+          {settle && <Alert type="warning" showIcon title={settle.label} description={settle.detail} />}
         </>
       )}
 

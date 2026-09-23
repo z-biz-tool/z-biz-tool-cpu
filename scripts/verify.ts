@@ -1752,6 +1752,31 @@ ok:
     else delete (globalThis as any).localStorage;
   }
 
+  /* GATE: antd v6 已废弃的写法一律挡在门外。控制台里的 deprecation 警告会被
+   * 当成「应用出错」看见，而且升级后就是 breaking change；注释里出现这些词不算。 */
+  {
+    const { readdirSync, readFileSync } = await import("node:fs");
+    const bad: string[] = [];
+    const walk = (dir: string) => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const p = dir + "/" + e.name;
+        if (e.isDirectory()) walk(p);
+        else if (p.endsWith(".tsx")) {
+          // 去掉注释再匹配，免得注释里提到旧写法就误报
+          const src = readFileSync(p, "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/[^\n]*/g, "$1");
+          for (const re of [/\bmaskClosable\b/g, /\bdestroyOnClose\b/g]) {
+            for (const m of src.matchAll(re)) bad.push(`${p}: ${m[0]}`);
+          }
+          for (const m of src.matchAll(/<Alert\b[\s\S]*?\/>/g)) {
+            if (!/\btitle=/.test(m[0])) bad.push(`${p}: Alert 仍用 message`);
+          }
+        }
+      }
+    };
+    walk(new URL("../src", import.meta.url).pathname);
+    check("GATE: 没有 antd v6 废弃属性", bad.length === 0, bad.join(" | "));
+  }
+
   // AT-01..AT-12 全验收矩阵
   const atModule = await import("../src/atCoverage.ts");
   const { existsSync: existsSync2, readFileSync: readFileSync2 } = await import("node:fs");

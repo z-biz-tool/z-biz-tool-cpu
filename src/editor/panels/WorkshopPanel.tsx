@@ -78,7 +78,7 @@ export default function WorkshopPanel() {
           showIcon
           closable
           onClose={() => setNotice(null)}
-          message={notice.text}
+          title={notice.text}
           style={{ marginBottom: 8 }}
         />
       )}
@@ -87,7 +87,7 @@ export default function WorkshopPanel() {
         <Alert
           type="info"
           showIcon
-          message="作品工坊还是空的"
+          title="作品工坊还是空的"
           description="在画布里选中元件后「打包子电路」，组件会自动登记到这里；也可以导入已有的 workshop.json 备份。组件版本一旦发布就不可修改，升级需另存为新版本。"
         />
       ) : (
@@ -211,7 +211,7 @@ export default function WorkshopPanel() {
               type={d.removed.length || d.changed.length ? "warning" : "success"}
               showIcon
               style={{ marginTop: 12 }}
-              message={`v${from.version} → v${to.version} 接口差异`}
+              title={`v${from.version} → v${to.version} 接口差异`}
               description={
                 <ul className="asm-errors">
                   {d.added.map((n) => (

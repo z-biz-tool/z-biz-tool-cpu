@@ -96,7 +96,7 @@ export default function AsmPanel() {
         <Tag color="blue">{words.length} 条指令</Tag>
       </div>
 
-      {!!errors.length && <Alert type="error" showIcon message="汇编错误" description={<ul className="asm-errors">{errors.map((e) => <li key={e}>{e}</li>)}</ul>} />}
+      {!!errors.length && <Alert type="error" showIcon title="汇编错误" description={<ul className="asm-errors">{errors.map((e) => <li key={e}>{e}</li>)}</ul>} />}
 
       {listing.length ? (
         <Table
