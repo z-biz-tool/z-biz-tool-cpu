@@ -1129,4 +1129,134 @@ export const SOLUTIONS: Record<string, Fix> = {
       [dly, "q", "LOG", "wen"],
     ]);
   }),
+  "m5-1-seek": onRoot((b) => {
+    b.link([
+      ["CLK", "out", "pl", "CLK"],
+      ["TARGET", "out", "pl", "TARGET"],
+      ["STEP", "out", "pl", "STEP"],
+      ["RD", "out", "pl", "RD"],
+      ["pl", "Q", "Q", "in"],
+    ]);
+  }),
+  "m5-2-elevator": onRoot((b) => {
+    /* 磁头从道 0 扫到道 3，路过即读；print 在沿上取值 */
+    const t3 = b.add("const", 14, 0, { bitWidth: 2, value: 3 });
+    const one = b.add("const", 14, 4, { value: 1 });
+    b.link([
+      ["CLK", "out", "pl", "CLK"],
+      [t3, "out", "pl", "TARGET"],
+      [one, "out", "pl", "STEP"],
+      [one, "out", "pl", "RD"],
+      ["CLK", "out", "pt", "clk"],
+      ["GO", "out", "pt", "en"],
+      ["pl", "Q", "pt", "val"],
+    ]);
+  }),
+  "m5-3-density": onRoot((b) => {
+    /* 同一电路读两块盘：只有打印门控随 SEL 切换，疏盘多等一倍 */
+    const one = b.add("const", 14, 0, { value: 1 });
+    const ns = b.add("not", 14, 4, {});
+    const ga = b.add("and", 16, 2, {});
+    const z8 = b.add("const", 14, 8, { bitWidth: 8 });
+    const eqz = b.add("cmp", 30, 12, {});
+    const nz = b.add("not", 33, 12, { inputs: 1 });
+    const gb = b.add("and", 35, 10, { inputs: 3 });
+    b.link([
+      ["CLK", "out", "pa", "CLK"],
+      ["CLK", "out", "pb", "CLK"],
+      [one, "out", "pa", "RD"],
+      [one, "out", "pb", "RD"],
+      ["SEL", "out", ns, "i0"],
+      ["GO", "out", ga, "i0"],
+      [ns, "out", ga, "i1"],
+      [ga, "out", "pta", "en"],
+      ["CLK", "out", "pta", "clk"],
+      ["pa", "Q", "pta", "val"],
+      ["pb", "Q", eqz, "a"],
+      [z8, "out", eqz, "b"],
+      [eqz, "eq", nz, "i0"],
+      ["GO", "out", gb, "i0"],
+      ["SEL", "out", gb, "i1"],
+      [nz, "out", gb, "i2"],
+      [gb, "out", "ptb", "en"],
+      ["CLK", "out", "ptb", "clk"],
+      ["pb", "Q", "ptb", "val"],
+    ]);
+  }),
+  "m6-1-tiers": onRoot((b) => {
+    /* 热：常数直通；温：小 RAM；冷：盘上——mux 按页号选层 */
+    const mx = b.add("mux", 38, 2, { inputs: 4 });
+    const hot = b.add("const", 20, 20, { bitWidth: 2, value: 3 });
+    const z2 = b.add("const", 20, 24, { bitWidth: 2 });
+    const t3 = b.add("const", 30, 20, { bitWidth: 2, value: 3 });
+    const one = b.add("const", 30, 24, { value: 1 });
+    b.link([
+      ["CLK", "out", "WARM", "clk"],
+      ["PAGE", "out", "WARM", "addr"],
+      ["CLK", "out", "cold", "CLK"],
+      [t3, "out", "cold", "TARGET"],
+      [one, "out", "cold", "STEP"],
+      [one, "out", "cold", "RD"],
+      ["PAGE", "out", mx, "sel"],
+      [hot, "out", mx, "i0"],
+      ["WARM", "dout", mx, "i1"],
+      [z2, "out", mx, "i2"],
+      ["cold", "Q", mx, "i3"],
+      [mx, "out", "DATA", "in"],
+    ]);
+  }),
+  "m6-2-locality": onRoot((b) => {
+    /* A 盘照旧直读；B 盘转满一圈（ROT==3）才挪一道——局部性税单 */
+    const one = b.add("const", 12, 0, { value: 1 });
+    const t3 = b.add("const", 12, 16, { bitWidth: 2, value: 3 });
+    const t38 = b.add("const", 12, 20, { bitWidth: 8, value: 3 });
+    const z8 = b.add("const", 12, 24, { bitWidth: 8 });
+    const eqr = b.add("cmp", 30, 16, {});
+    const step = b.add("and", 33, 14, { inputs: 3 });
+    const ns = b.add("not", 14, 4, {});
+    const ga = b.add("and", 16, 2, {});
+    const eqz = b.add("cmp", 30, 24, {});
+    const nz = b.add("not", 33, 24, { inputs: 1 });
+    const gb = b.add("and", 35, 20, { inputs: 3 });
+    b.link([
+      ["CLK", "out", "la", "CLK"],
+      ["CLK", "out", "lb", "CLK"],
+      [one, "out", "la", "RD"],
+      [one, "out", "lb", "RD"],
+      [t3, "out", "lb", "TARGET"],
+      ["lb", "ROT", eqr, "a"],
+      [t38, "out", eqr, "b"],
+      ["GO", "out", step, "i0"],
+      ["SW", "out", step, "i1"],
+      [eqr, "eq", step, "i2"],
+      [step, "out", "lb", "STEP"],
+      ["SW", "out", ns, "i0"],
+      ["GO", "out", ga, "i0"],
+      [ns, "out", ga, "i1"],
+      [ga, "out", "pta", "en"],
+      ["CLK", "out", "pta", "clk"],
+      ["la", "Q", "pta", "val"],
+      ["lb", "Q", eqz, "a"],
+      [z8, "out", eqz, "b"],
+      [eqz, "eq", nz, "i0"],
+      ["GO", "out", gb, "i0"],
+      ["SW", "out", gb, "i1"],
+      [nz, "out", gb, "i2"],
+      [gb, "out", "ptb", "en"],
+      ["CLK", "out", "ptb", "clk"],
+      ["lb", "Q", "ptb", "val"],
+    ]);
+  }),
+  "m6-3-fsync": onRoot((b) => {
+    /* 页缓存易失、fsync 落盘：落的是缓存此刻的值、PG 此刻指向的页 */
+    b.link([
+      ["CLK", "out", "cache", "CLK"],
+      ["WR", "out", "cache", "EN"],
+      ["DIN", "out", "cache", "BL"],
+      ["CLK", "out", "DISK", "clk"],
+      ["PG", "out", "DISK", "addr"],
+      ["cache", "Q", "DISK", "din"],
+      ["FS", "out", "DISK", "wen"],
+    ]);
+  }),
 };

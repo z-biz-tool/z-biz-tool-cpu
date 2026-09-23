@@ -1769,7 +1769,244 @@ const M4: Level[] = [
   },
 ];
 
-export const STORAGE_LEVELS: Level[] = [...M1, ...M2, ...M3, ...M4];
+/* ---------------- 世界 M5 磁头与盘片（机械硬盘） ---------------- */
+
+const M5: Level[] = [
+  {
+    id: "m5-1-seek",
+    tier: 6,
+    name: "寻道与旋转",
+    brief:
+      "机械盘 PLATTER 每拍转一格、STEP=1 时磁头每拍挪一道、RD=1 时给出磁头下方的扇区。把线接好，然后体验三件事：本道读也要等旋转、跨道读要先寻道、转满一圈才能回到起始扇区。",
+    teach:
+      "机械硬盘的两笔延迟账：寻道（毫秒级挪磁臂）与旋转（等扇区转到磁头下）。在电路里它们被离散成拍数预算——读得越散，等得越久，这就是『随机读慢』的全部原因。",
+    available: ["input", "output", "clock", "PLATTER", "const"],
+    skeleton: () =>
+      circuit([
+        clkSrc("CLK", 0, 0),
+        ioIn("TARGET", 4, 1),
+        ioIn("STEP", 8, 1),
+        ioIn("RD", 12, 1),
+        comp("pl", "PLATTER", 20, 0, { addrBits: 1, sectors: 4, data: "0xa1 0xa2 0xa3 0xa4 0xb1 0xb2 0xb3 0xb4" }, { name: "PL" }),
+        ioOut("Q", 40, 0, 8),
+      ]),
+    tests: [
+      {
+        name: "本道等一拍：读到 A2",
+        phases: [{ inputs: { TARGET: 0, STEP: 0, RD: 1 }, steps: 1 }],
+        outputs: { Q: 0xa2 },
+      },
+      {
+        name: "两拍内寻到道 1 读 B3",
+        phases: [
+          { inputs: { TARGET: 1, STEP: 1, RD: 0 }, steps: 1 },
+          { inputs: { RD: 1 }, steps: 1 },
+        ],
+        outputs: { Q: 0xb3 },
+      },
+      {
+        name: "转满一圈回到 B1",
+        phases: [
+          { inputs: { TARGET: 1, STEP: 1, RD: 1 }, steps: 1 },
+          { inputs: { RD: 1 }, steps: 3 },
+        ],
+        outputs: { Q: 0xb1 },
+      },
+    ],
+    hint: "三根开关直接进 PLATTER 的 TARGET/STEP/RD，Q 出来接灯。盘在每个时钟沿转一格：第 t 拍结束时磁头下方是扇区 t%4。",
+  },
+  {
+    id: "m5-2-elevator",
+    tier: 6,
+    name: "电梯调度",
+    brief:
+      "四个扇区散在四条道上。GO 一开，让磁头从道 0 一路扫到道 3、路过即读，边读边把扇区值打进终端——看日志里的到达顺序，跟逻辑页号完全是两码事。",
+    teach:
+      "电梯算法（SCAN）：磁头单向扫过去，路过谁读谁，回来的路上再照顾反向请求。" +
+      "对盘来说『第几个请求』毫无意义，『磁头下方是谁』才是一切——日志的顺序就是物理顺序。",
+    available: ["input", "output", "clock", "PLATTER", "print", "const"],
+    skeleton: () =>
+      circuit([
+        clkSrc("CLK", 0, 0),
+        ioIn("GO", 4, 1),
+        comp("pl", "PLATTER", 20, 0, { addrBits: 2, sectors: 2, data: "11 12 21 22 31 32 41 42" }, { name: "PL" }),
+        comp("pt", "print", 36, 0, { radix: "dec" }, { name: "PT" }),
+      ]),
+    tests: [
+      {
+        name: "扫一遍，日志按物理顺序",
+        phases: [{ inputs: { GO: 1 }, steps: 4 }],
+        log: "11,22,31,42",
+      },
+      {
+        name: "不发车就没有日志",
+        phases: [{ inputs: { GO: 0 }, steps: 2 }],
+        log: "",
+      },
+    ],
+    hint: "TARGET 挂常数 3、STEP 与 RD 挂常数 1，磁头就自己扫了；print 的 en 接 GO、val 接 PL 的 Q。注意 print 是在时钟沿前取值的。",
+  },
+  {
+    id: "m5-3-density",
+    tier: 6,
+    name: "密与疏",
+    brief:
+      "同样四个数 1..4：A 盘密密地排在一条道上，B 盘把它们摊在 8 个扇区里。用 SEL 选择读哪一盘，GO 开读——同样的数据，疏盘要多等一倍拍数。",
+    teach:
+      "同样的字节数，占的扇区越多，旋转等待越长。文件系统尽量把相关数据挤在连续扇区（甚至预读），就是在给磁头省这笔等待账。",
+    available: ["input", "output", "clock", "PLATTER", "print", "cmp", "not", "and", "or", "const"],
+    skeleton: () =>
+      circuit([
+        clkSrc("CLK", 0, 0),
+        ioIn("SEL", 4, 1),
+        ioIn("GO", 8, 1),
+        comp("pa", "PLATTER", 20, 0, { addrBits: 1, sectors: 4, data: "1 2 3 4" }, { name: "PA" }),
+        comp("pb", "PLATTER", 20, 8, { addrBits: 1, sectors: 8, data: "1 0 2 0 3 0 4 0" }, { name: "PB" }),
+        comp("pta", "print", 36, 0, { radix: "dec" }, { name: "PTA" }),
+        comp("ptb", "print", 36, 8, { radix: "dec" }, { name: "PTB" }),
+      ]),
+    tests: [
+      {
+        name: "密盘 4 拍读全",
+        phases: [{ inputs: { SEL: 0, GO: 1 }, steps: 4 }],
+        log: "1,2,3,4",
+      },
+      {
+        name: "疏盘要 8 拍",
+        phases: [{ inputs: { SEL: 1, GO: 1 }, steps: 8 }],
+        log: "1,2,3,4",
+      },
+    ],
+    hint: "两块盘的 RD 都挂常数 1。打印门控：A 盘 en=GO·¬SEL；B 盘 en=GO·SEL·(Q≠0)——空扇区别打印。数数 B 盘几次非零。",
+  },
+];
+
+/* ---------------- 世界 M6 整机（缓存金字塔与掉电） ---------------- */
+
+const M6: Level[] = [
+  {
+    id: "m6-1-tiers",
+    tier: 6,
+    name: "三层书架",
+    brief:
+      "一个 2 位页号 PAGE，三层存储各管一段：页 0 是热页（常数直通，寄存器速度）；页 1、2 是温页（在 WARM 这块小 RAM 里）；页 3 是冷页（在盘上，要先寻道）。用 4 选 1 把 DATA 选对。",
+    teach:
+      "存储金字塔：越热的数据离处理器越近、越贵也越快；越冷的数据越远、越便宜也越慢。" +
+      "『在哪一层』由访问频率决定——缓存、内存、盘，每个系统都在维护自己的书架。",
+    available: ["input", "output", "clock", "ram", "rom", "PLATTER", "mux", "demux", "and", "or", "not", "const"],
+    skeleton: () =>
+      circuit([
+        clkSrc("CLK", 0, 0),
+        ioIn("PAGE", 4, 2),
+        memComp("WARM", 20, 0, "ram", 2, 2, "0 1 0 0"),
+        comp("cold", "PLATTER", 26, 6, { addrBits: 2, sectors: 2, data: "0 0 0 0 0 0 0 2" }, { name: "COLD" }),
+        ioOut("DATA", 44, 4, 2),
+      ]),
+    tests: [
+      {
+        name: "热页直通",
+        phases: [{ inputs: { PAGE: 0 }, steps: 1 }],
+        outputs: { DATA: 3 },
+      },
+      {
+        name: "温页在 RAM",
+        phases: [{ inputs: { PAGE: 1 }, steps: 1 }],
+        outputs: { DATA: 1 },
+      },
+      {
+        name: "冷页要先寻道",
+        phases: [{ inputs: { PAGE: 3 }, steps: 3 }],
+        outputs: { DATA: 2 },
+      },
+    ],
+    hint: "mux sel=PAGE：i0=常数 3，i1=WARM 的 dout（addr=PAGE），i2=常数 0，i3=COLD 的 Q（TARGET=3、STEP=1、RD=1，等磁头扫到道 3）。",
+  },
+  {
+    id: "m6-2-locality",
+    tier: 6,
+    name: "局部性",
+    brief:
+      "同样四个数：SW=0 读 A 盘——它们挤在道 0 上，4 拍读完；SW=1 读 B 盘——每条道一个数，磁头必须等旋转对齐才能跳下一道。给 B 盘搭『转满一圈才走』的步进节拍，15 拍内读完。",
+    teach:
+      "程序的访问若有局部性，盘可以把相邻数据一口气读完再挪窝；访问若打散在全场，磁头就得一遍遍等旋转。" +
+      "STEP 的节拍从『每拍走』改成『对齐才走』，就是机械盘世界的局部性税单。",
+    available: ["input", "output", "clock", "PLATTER", "print", "cmp", "not", "and", "or", "const"],
+    skeleton: () =>
+      circuit([
+        clkSrc("CLK", 0, 0),
+        ioIn("SW", 4, 1),
+        ioIn("GO", 8, 1),
+        comp("la", "PLATTER", 20, 0, { addrBits: 1, sectors: 4, data: "4 5 6 7" }, { name: "LA" }),
+        comp("lb", "PLATTER", 20, 8, { addrBits: 2, sectors: 4, data: "0 0 4 0 0 0 5 0 0 0 6 0 0 0 7 0" }, { name: "LB" }),
+        comp("pta", "print", 36, 0, { radix: "dec" }, { name: "PTA" }),
+        comp("ptb", "print", 36, 8, { radix: "dec" }, { name: "PTB" }),
+      ]),
+    tests: [
+      {
+        name: "数据挤在一道：4 拍",
+        phases: [{ inputs: { SW: 0, GO: 1 }, steps: 4 }],
+        log: "4,5,6,7",
+      },
+      {
+        name: "数据散在四道：15 拍",
+        phases: [{ inputs: { SW: 1, GO: 1 }, steps: 15 }],
+        log: "4,5,6,7",
+      },
+    ],
+    hint: "A 盘照旧。B 盘的 STEP = GO·SW·(ROT==3)：转满一圈才挪一道；TARGET=3、RD=1。打印门控照 m5-3，注意 ROT、Q 都是 8 位。",
+  },
+  {
+    id: "m6-3-fsync",
+    tier: 6,
+    name: "掉电与 fsync",
+    brief:
+      "写入先落在页缓存 CACHE（一只电容：易失），只有拉一下 FS（fsync）才会把缓存当前值落进 DISK。每个用例都是一次掉电重演：掉电之后，只有 fsync 过的页还在。",
+    teach:
+      "OS 把写攒在页缓存里批量下盘，代价是掉电窗口；fsync 是应用主动喊『现在就落盘』。" +
+      "用例之间仿真器清零，正是『电源被拔掉』的物理重演——没落盘的，就当从没发生过。",
+    available: ["input", "output", "clock", "CAPCELL", "ram", "and", "or", "not", "const"],
+    skeleton: () =>
+      circuit([
+        clkSrc("CLK", 0, 0),
+        ioIn("PG", 4, 1),
+        ioIn("DIN", 8, 2),
+        ioIn("WR", 12, 1),
+        ioIn("FS", 16, 1),
+        comp("cache", "CAPCELL", 20, 0, { leakN: 999 }, { name: "CACHE" }),
+        memComp("DISK", 28, 0, "ram", 2, 1, ""),
+      ]),
+    tests: [
+      {
+        name: "写 A=2 并 fsync：掉电还在",
+        phases: [
+          { inputs: { PG: 0, DIN: 2, WR: 1 }, steps: 1 },
+          { inputs: { WR: 0, FS: 1 }, steps: 1 },
+        ],
+        mem: [{ name: "DISK", at: 0, expect: 2 }],
+      },
+      {
+        name: "写 B=1 没 fsync：掉电就丢",
+        phases: [{ inputs: { PG: 1, DIN: 1, WR: 1 }, steps: 1 }],
+        mem: [{ name: "DISK", at: 1, expect: 0 }],
+      },
+      {
+        name: "fsync 只落当前页",
+        phases: [
+          { inputs: { PG: 0, DIN: 2, WR: 1 }, steps: 1 },
+          { inputs: { PG: 1, DIN: 1, WR: 1 }, steps: 1 },
+          { inputs: { WR: 0, FS: 1 }, steps: 1 },
+        ],
+        mem: [
+          { name: "DISK", at: 0, expect: 0 },
+          { name: "DISK", at: 1, expect: 1 },
+        ],
+      },
+    ],
+    hint: "CACHE：EN=WR、BL=DIN。DISK：addr=PG、din=CACHE 的 Q、wen=FS。fsync 落的是『缓存此刻的值、PG 此刻指向的页』。",
+  },
+];
+
+export const STORAGE_LEVELS: Level[] = [...M1, ...M2, ...M3, ...M4, ...M5, ...M6];
 
 export function levelById(id: string): Level | undefined {
   return LEVELS.find((l) => l.id === id) ?? STORAGE_LEVELS.find((l) => l.id === id);
