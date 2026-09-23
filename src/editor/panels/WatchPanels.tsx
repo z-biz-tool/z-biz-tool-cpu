@@ -194,6 +194,27 @@ export function HelpPanel() {
         焦点在输入框、下拉框或弹窗里时，以上快捷键不生效——按键交给当前区域处理（文本框里的 ⌘Z 撤销的是文字）。
       </div>
 
+      <div className="sub-title">键盘与读屏</div>
+      <table className="help-keys">
+        <tbody>
+          {[
+            ["Tab", "焦点移到画布旁的可访问视图（元件与端口、连接表、未连接端口、诊断）"],
+            ["回车 / 空格", "在可访问视图里执行「读取当前引脚值」"],
+          ].map(([k, v]) => (
+            <tr key={k}>
+              <td>
+                <code>{k}</code>
+              </td>
+              <td>{v}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div className="panel-note">
+        画布是位图，读屏拿不到形状，因此另有一份等效的元件与端口清单：焦点用 Tab 移到它上面时整块会显形，平时只被辅助技术读到。
+        保存、运行、判题的结论会以不打断的方式播报；仿真的波形不逐拍朗读，要看当前引脚值就按「读取当前引脚值」。
+      </div>
+
       <div className="sub-title">Z16 指令集</div>
       <div className="panel-note">
         16 位指令字：<code>[15:12] OP · [11:8] A · [7:4] B</code>；立即数形式第二条字放 16 位立即数。

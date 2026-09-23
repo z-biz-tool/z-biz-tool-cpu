@@ -1331,6 +1331,64 @@ ok:
     check(`A11Y: 门/运算元件的位宽来自推断而非写死（${inferred}/${LEVELS.length} 关有 >1 位非 IO 端口）`, inferred > 0, `${inferred}`);
   }
 
+  /* doc 02 §10：动态状态播报 —— 结论要能听到，但噪声（每拍波形、每次按键中间态）不行 */
+  {
+    const { factsKey, nextAnnouncement } = await import("../src/editor/announce.ts");
+    type F = Parameters<typeof nextAnnouncement>[0];
+    const speak = (f: F, seen: ReturnType<typeof factsKey>) => {
+      const r = nextAnnouncement(f, seen);
+      return r ? r.say : "";
+    };
+    const step = (f: F, seen: ReturnType<typeof factsKey>) => {
+      const r = nextAnnouncement(f, seen);
+      return [r ? r.say : "", r ? r.seen : seen] as [string, ReturnType<typeof factsKey>];
+    };
+    const base: F = { run: "paused", save: "saved", judge: null, selection: { comps: [], wires: [] }, labels: new Map() };
+    const seen0 = factsKey(base);
+    check("AN: 状态没变就一句都不播（不打断读屏）", nextAnnouncement(base, seen0) === null);
+    check("AN: 保存中间态 pending/saving 不进播报", (() => {
+      const a = speak({ ...base, save: "pending" }, seen0);
+      const b = speak({ ...base, save: "saving" }, seen0);
+      return a === "" && b === "";
+    })());
+    check("AN: saved→pending→saving→saved 一整圈都不冒话", (() => {
+      for (const s of ["pending", "saving", "saved"] as const) if (nextAnnouncement({ ...base, save: s }, seen0)) return false;
+      return true;
+    })());
+    const [failSay, seenFail] = step({ ...base, save: "failed", saveError: "本地存储配额用尽" }, seen0);
+    check("AN: 保存失败要播报并带上原因", /尚未写入本地/.test(failSay) && /配额用尽/.test(failSay), failSay);
+    const [roSay] = step({ ...base, save: "readonly" }, seenFail);
+    check("AN: 被别的标签页接管要单独说清（不能报成已保存）", /只读副本/.test(roSay) && !/已保存/.test(roSay), roSay);
+    const [runSay, seenRun] = step({ ...base, run: "running" }, seen0);
+    check("AN: 运行 / 暂停切换按状态播报", runSay === "运行中", runSay);
+    const [oscSay] = step({ ...base, run: "oscillating" }, seenRun);
+    check("AN: 振荡不许冒充运行中", /振荡|NON_CONVERGENT/.test(oscSay), oscSay);
+    const [haltSay] = step({ ...base, run: "halted" }, seenRun);
+    check("AN: 停机与报错文案互不混用", /HALTED|已停机/.test(haltSay) && !/振荡/.test(haltSay), haltSay);
+    const [errSay] = step({ ...base, run: "error" }, seenRun);
+    check("AN: 阻断性错误要播出来", errSay.length > 0 && !/运行中/.test(errSay), errSay);
+    /* 每拍只改数值、不改状态：paused→running 那句合法，之后连跑 199 拍不能再冒话 */
+    {
+      const first = nextAnnouncement({ ...base, run: "running" }, seen0);
+      let seen = first ? first.seen : factsKey(base);
+      let noise = 0;
+      for (let i = 0; i < 199; i++) if (nextAnnouncement({ ...base, run: "running" }, seen)) noise++;
+      check("AN: 连续 199 拍仿真不产生任何播报（波形不逐拍念）", first !== null && noise === 0, `${noise} 条噪音`);
+    }
+    const jf: F = { ...base, run: "running", save: "pending", judge: { pass: false, ok: 3, total: 5, levelId: "t2-alu4" } };
+    const judgeSay = speak(jf, seen0);
+    check("AN: 一次只播一句，判题优先于运行/保存", /判题未通过/.test(judgeSay) && !/运行中/.test(judgeSay), judgeSay);
+    check("AN: 判题播报给出通过数", /3\/5/.test(judgeSay), judgeSay);
+    const jp: F = { ...jf, judge: { pass: true, ok: 5, total: 5, levelId: "t2-alu4" } };
+    check("AN: 判题通过要明说通过", /判题通过/.test(speak(jp, factsKey(jf))), speak(jp, factsKey(jf)));
+    const sel: F = { ...base, selection: { comps: ["c1", "c2"], wires: [] }, labels: new Map([["c1", "A"], ["c2", "进位链"]]) };
+    const selSay = speak(sel, seen0);
+    check("AN: 选区播报用画布名字而不是内部 id", /已选中 2 个元件：A、进位链/.test(selSay) && !/c1/.test(selSay), selSay);
+    check("AN: 清空选区也要播报", /未选中/.test(speak({ ...base, selection: { comps: [], wires: [] } }, factsKey(sel))), speak({ ...base }, factsKey(sel)));
+    /* 拖动/改名只动坐标与标签，选区集合没变：不能每帧念一遍"已选中" */
+    check("AN: 只改名字不改选区，不重复播报", speak({ ...sel, labels: new Map([["c1", "A 改名"], ["c2", "进位链"]]) }, factsKey(sel)) === "");
+  }
+
   /* doc 02 §5.2: 运行状态语言 —— HALTED / NON_CONVERGENT / RESOURCE_LIMIT 互不冒充 */
   {
     // 反相器自环：有「最近迭代重复」的事实作证据，才允许说振荡
@@ -1999,6 +2057,20 @@ ok:
     check("GATE: 表格带行列表头，读屏能对齐单元格", /scope="col"/.test(view) && /scope="row"/.test(view));
     check("GATE: 实时值由用户主动查询并按 polite 播报", /role="status"/.test(view) && /aria-live="polite"/.test(view) && /读取当前引脚值/.test(view));
     check("GATE: 结构表只在拓扑变化时重算", /const sig = useMemo/.test(view) && /useMemo\(\(\) => buildA11y\(circuit, design, sim\), \[sig, design, sim\]/.test(view));
+  }
+
+  /* GATE: 播报层的接线 —— 逻辑可以单测，但"挂在页面哪、用什么 live 语义"
+   * 只能靠源码门禁守住：换成 aria-live="assertive" 就会打断读屏当前朗读。 */
+  {
+    const { readFileSync } = await import("node:fs");
+    const app = readFileSync(new URL("../src/App.tsx", import.meta.url).pathname, "utf8");
+    const live = readFileSync(new URL("../src/editor/A11yAnnouncer.tsx", import.meta.url).pathname, "utf8");
+    const help = readFileSync(new URL("../src/editor/panels/WatchPanels.tsx", import.meta.url).pathname, "utf8");
+    check("GATE: 播报区挂在应用根部", /import \{ A11yAnnouncer \}/.test(app) && /<A11yAnnouncer \/>/.test(app));
+    check("GATE: 播报用 polite + atomic，不用 assertive", /role="status"/.test(live) && /aria-live="polite"/.test(live) && /aria-atomic="true"/.test(live) && !/assertive/.test(live));
+    check("GATE: 开机第一眼不播（先把当前状态当基线）", /if \(!seen\.current\)/.test(live) && /factsKey\(facts\)/.test(live));
+    check("GATE: 组件只负责接线，文案规则在 announce.ts", !/判题通过|已选中/.test(live) && /nextAnnouncement\(facts, seen\.current\)/.test(live));
+    check("GATE: 手册写清读屏与 Tab 行为", /键盘与读屏/.test(help) && /读取当前引脚值/.test(help));
   }
 
   // AT-01..AT-12 全验收矩阵

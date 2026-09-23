@@ -2,6 +2,7 @@ import { ConfigProvider, Tabs, Tooltip, theme } from "antd";
 import zhCN from "antd/locale/zh_CN";
 import { useEffect, useMemo } from "react";
 import Canvas from "./editor/Canvas.tsx";
+import { A11yAnnouncer } from "./editor/A11yAnnouncer.tsx";
 import Inspector from "./editor/Inspector.tsx";
 import { PackageMetaDialog } from "./editor/PackageMetaDialog.tsx";
 import Palette from "./editor/Palette.tsx";
@@ -163,6 +164,7 @@ export default function App() {
       }}
     >
       <div className="app">
+        <A11yAnnouncer />
         <Toolbar />
         <div className="app-body">
           <Palette />
