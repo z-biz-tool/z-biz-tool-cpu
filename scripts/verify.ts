@@ -2815,7 +2815,7 @@ ok:
       "GATE: 撤销事实喂进了播报通道，并且挂在 effect 依赖里",
       /const historyOp = useEditor\(\(s\) => s\.historyOp\)/.test(stripLive) &&
         /history: historyOp,/.test(stripLive) &&
-        /\]\s*,\s*\[[^\]]*\bhistoryOp\b[^\]]*\]/.test(stripLive),
+        /}, \[[^\]]*\bhistoryOp\b[^\]]*\]/.test(stripLive),
     );
     check(
       "GATE: store 里撤/重做各自自增 seq，漏一边就少一句播报",
@@ -2826,12 +2826,11 @@ ok:
           const b = storeLive.indexOf(to);
           return a >= 0 && b > a ? storeLive.slice(a, b) : "";
         };
-        const both = (s: string) => /historyOp: \{ seq: st\.historyOp\.seq \+ 1/.test(s);
+        const both = (s: string) => /historyOp: \{ seq: st\.historyOp\.seq \+ 1/.test(s) && /label: last\.label/.test(s);
         return (
           both(body("undoAction() {", "redoAction() {")) &&
           both(body("redoAction() {", "beginTransaction(label) {")) &&
           /* redo 栈上的标签必须是跟着走过来的动作名，写死"撤销/重做"等于没播报 */
-          (storeLive.match(/label: last\.label/g) ?? []).length === 2 &&
           !/label: "(撤销|重做)"/.test(storeLive)
         );
       })(),
