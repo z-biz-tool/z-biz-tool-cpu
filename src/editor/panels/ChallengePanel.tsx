@@ -267,7 +267,7 @@ function StorageSection({
             世界 {w.replace(/^M/, "")} · {worldNames[w] ?? ""}
           </p>
           <div className="tier-items">
-            {STORAGE_LEVELS.filter((l) => l.id.startsWith(w)).map((l) => {
+            {STORAGE_LEVELS.filter((l) => l.id.toUpperCase().startsWith(w)).map((l) => {
               const ok = passed(progress, l.id);
               const rec = progress.done[l.id];
               return (
@@ -325,7 +325,7 @@ function FastSection({
             世界 {w.replace(/^F/, "")} · {worldNames[w] ?? ""}
           </p>
           <div className="tier-items">
-            {FAST_LEVELS.filter((l) => l.id.startsWith(w)).map((l) => {
+            {FAST_LEVELS.filter((l) => l.id.toUpperCase().startsWith(w)).map((l) => {
               const ok = passed(progress, l.id);
               const rec = progress.done[l.id];
               return (
