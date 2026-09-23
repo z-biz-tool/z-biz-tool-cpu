@@ -17,6 +17,10 @@ import { useEditor } from "./store.ts";
  * 元件清单是一份可漫游的列表：整张表只占一个 Tab 停靠点，↑↓←→ 在元件之间
  * 走（neighbour），走到的那个元件由 describeFocus 说明类型与引脚数，回车 /
  * 空格把它选到画布上 —— 选中之后画布、属性面板、播报讲的是同一个元件。
+ *
+ * 未连接端口清单同时是 §9 要的"端口选择器"：每一行是个按钮，按一下把该端口
+ * 选作连线起点（画布上那根橡皮筋跟着走），再按另一行就落一根线 —— 键盘用户
+ * 不必再用鼠标去命中几像素大的引脚。
  * ------------------------------------------------------------------ */
 
 const endName = (ref: string, labels: Map<string, string>) => {
@@ -31,6 +35,9 @@ export function CanvasA11y() {
   const sim = useEditor((s) => s.sim);
   const selection = useEditor((s) => s.selection);
   const setSelection = useEditor((s) => s.setSelection);
+  const pendingWire = useEditor((s) => s.pendingWire);
+  const startWire = useEditor((s) => s.startWire);
+  const cancelWire = useEditor((s) => s.cancelWire);
   const [readout, setReadout] = useState<string[]>([]);
   /** 清单里当前停着的元件：整张表只有一个 Tab 停靠点，方向键在它内部走 */
   const [focusId, setFocusId] = useState<string | null>(null);
@@ -188,13 +195,41 @@ export function CanvasA11y() {
       )}
       <h3>未连接端口</h3>
       {openPorts.length ? (
-        <ul>
-          {openPorts.map((t, i) => (
-            <li key={i}>{t}</li>
-          ))}
-        </ul>
+        <>
+          <p id="a11y-port-hint" className="a11y-hint">
+            点一行把该端口选作连线起点，再点另一行完成连线（等价于在画布上点两个引脚）。
+          </p>
+          <ul className="a11y-ports">
+            {openPorts.map((p) => (
+              <li key={`${p.comp}.${p.pin}`}>
+                <button
+                  type="button"
+                  className="a11y-port"
+                  aria-pressed={!!pendingWire && pendingWire.comp === p.comp && pendingWire.pin === p.pin}
+                  aria-describedby="a11y-port-hint"
+                  onClick={() => startWire({ comp: p.comp, pin: p.pin })}
+                >
+                  {p.text}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </>
       ) : (
         <p>{model.comps.length ? "所有端口都已连接。" : "画布上还没有元件。"}</p>
+      )}
+      {/* 起点选上之后必须说清"接下来做什么"和"怎么反悔"：只把线头挂在画布上，
+          读屏用户听到的还是一句"未连接"，不知道有一根线正等着落地。 */}
+      {pendingWire && (
+        <>
+          <p role="status" aria-live="polite" className="a11y-hint">
+            连线起点已选 {endName(`${pendingWire.comp}.${pendingWire.pin}`, labels)}：再点一个端口完成连线，按 Esc
+            或用下面的按钮放弃。
+          </p>
+          <button type="button" onClick={cancelWire}>
+            取消连线
+          </button>
+        </>
       )}
       <h3>诊断</h3>
       {diags.length ? (

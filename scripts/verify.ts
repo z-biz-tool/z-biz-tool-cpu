@@ -1300,11 +1300,92 @@ ok:
     check(
       "A11Y: 缺线的脚被点名（含名称与位宽）",
       struct.openPorts.length === 2 &&
-        struct.openPorts.some((t) => /半接/.test(t) && /输入脚 i1/.test(t) && /4 位/.test(t) && /未连接/.test(t)) &&
-        struct.openPorts.some((t) => /半接/.test(t) && /输出脚 out/.test(t) && /未连接/.test(t)),
-      struct.openPorts.join(" | "),
+        struct.openPorts.some((o) => /半接/.test(o.text) && /输入脚 i1/.test(o.text) && /4 位/.test(o.text) && /未连接/.test(o.text)) &&
+        struct.openPorts.some((o) => /半接/.test(o.text) && /输出脚 out/.test(o.text) && /未连接/.test(o.text)),
+      struct.openPorts.map((o) => o.text).join(" | "),
+    );
+    check(
+      "A11Y: 缺线那一行还带得出落点（comp/pin／方向／位宽与模型对得上）",
+      struct.openPorts.every((o) =>
+        staticModel.comps.some((c) => c.id === o.comp && c.pins.some((p) => p.id === o.pin && p.dir === o.dir && p.width === o.width)),
+      ),
+      JSON.stringify(struct.openPorts.map((o) => [o.comp, o.pin, o.dir, o.width])),
     );
     check("A11Y: 端口一句话给出方向和位宽", /i0 输入 4 位/.test(struct.pins.get(half) ?? ""), struct.pins.get(half));
+
+    /* 端口选择器整条链路走真 store：未连接清单上按两次（第二次即 finishWire）就
+     * 该落一根线。只测文案的清单等于"念得出缺线、修不了缺线"，仍要拿鼠标点引脚。 */
+    {
+      const { useEditor } = await import("../src/editor/store.ts");
+      const { Simulator } = await import("../src/core/sim.ts");
+      const picked: Design = JSON.parse(JSON.stringify({ name: "a11y", root: ac, defs: [] }));
+      useEditor.setState({
+        design: picked,
+        view: "root",
+        sim: new Simulator(picked, picked.root),
+        simRev: 0,
+        selection: { comps: [], wires: [] },
+        pendingWire: null,
+      } as any);
+      const openNow = () => {
+        const s = useEditor.getState();
+        return portStructure(buildA11y(s.circuit(), s.design, s.sim)).openPorts;
+      };
+      const wires0 = picked.root.wires.length;
+      const p0 = openNow()[0];
+      const p1 = openNow()[1];
+      useEditor.getState().startWire({ comp: p0.comp, pin: p0.pin });
+      const hung = useEditor.getState();
+      check(
+        "端口选择: 第一按只挂起线头，不落线也不改设计",
+        hung.pendingWire?.comp === p0.comp && hung.pendingWire?.pin === p0.pin && picked.root.wires.length === wires0,
+        JSON.stringify(hung.pendingWire),
+      );
+      useEditor.getState().startWire({ comp: p0.comp, pin: p0.pin });
+      const twice = useEditor.getState();
+      check(
+        "端口选择: 同一端口再按一次是放弃，不是自环",
+        twice.pendingWire === null && picked.root.wires.length === wires0,
+        `${twice.pendingWire} / ${picked.root.wires.length}`,
+      );
+      useEditor.getState().startWire({ comp: p0.comp, pin: p0.pin });
+      useEditor.getState().startWire({ comp: p1.comp, pin: p1.pin });
+      const done = useEditor.getState();
+      const landed = picked.root.wires[picked.root.wires.length - 1];
+      const ends = [`${landed.a.comp}.${landed.a.pin}`, `${landed.b.comp}.${landed.b.pin}`].sort().join("↔");
+      const want = [`${p0.comp}.${p0.pin}`, `${p1.comp}.${p1.pin}`].sort().join("↔");
+      check(
+        "端口选择: 第二按落一根线并收掉线头",
+        done.pendingWire === null && picked.root.wires.length === wires0 + 1 && ends === want,
+        `${picked.root.wires.length} 根：${ends}（应为 ${want}）`,
+      );
+      check("端口选择: 落线之后未连接清单跟着变短", openNow().length === 0, openNow().map((o) => o.text).join(" | "));
+
+      /* 故障注入：线头挂在某个引脚上，那个元件却被删了（或撤销掉了）。这时再点
+       * 另一端，落出来的是一根连着不存在元件的幽灵线 —— 判题会报"未知元件"，
+       * 画布上却看不见任何线索。 */
+      const ghostDesign: Design = JSON.parse(JSON.stringify({ name: "a11y", root: ac, defs: [] }));
+      useEditor.setState({
+        design: ghostDesign,
+        view: "root",
+        sim: new Simulator(ghostDesign, ghostDesign.root),
+        simRev: 0,
+        selection: { comps: [], wires: [] },
+        pendingWire: null,
+      } as any);
+      useEditor.getState().startWire({ comp: n4, pin: "out" });
+      useEditor.getState().setSelection({ comps: [n4], wires: [] });
+      useEditor.getState().deleteSelection();
+      useEditor.getState().startWire({ comp: o4, pin: "in" });
+      const gs = useEditor.getState();
+      const ghost = gs.design.root.wires.filter((w) => w.a.comp === n4 || w.b.comp === n4);
+      check(
+        "端口选择: 起点元件被删掉后不落幽灵线，线头跟着收掉",
+        ghost.length === 0 && gs.pendingWire === null,
+        `${JSON.stringify(ghost)} / pending=${JSON.stringify(gs.pendingWire)}`,
+      );
+    }
+
 
     const fixed = new CircuitBuilder();
     const b1 = fixed.add("input", 0, 0, { bitWidth: 4 }, { name: "总线" });
@@ -2319,6 +2400,17 @@ ok:
     check("GATE: 行按钮不吃 .a11y-only button 的 margin，焦点环不被裁掉", /\.a11y-only button\.a11y-row\s*\{[^}]*margin: 0/.test(css) && /outline-offset: -2px/.test(css));
     check("GATE: 无调用方的 updateFocus 已删除，不再留假入口", !/updateFocus/.test(a11yCode) && !/updateFocus/.test(vc));
     check("GATE: 手册把方向键走访与回车选中写在按键表里", /↑ ↓ ← → \/ Home \/ End/.test(helpCode) && /走访元件/.test(helpCode));
+
+    /* GATE: 端口选择器的接线 —— 上面那 4 条行为测试证明"两个落点按两次就落线"
+     * 在 store 层成立，但界面要是把它退回成一列纯文本（或按下去只选不连），
+     * 键盘用户就又只能拿鼠标去点几像素大的引脚了。 */
+    check("GATE: 未连接端口是按钮，按下去交给出线工具而不是只选中", /className="a11y-port"[\s\S]{0,260}startWire\(\{ comp: p\.comp, pin: p\.pin \}\)/.test(vc));
+    check("GATE: 挂着的线头在清单上标得出来（aria-pressed 跟着 pendingWire 走）", /aria-pressed=\{!!pendingWire && pendingWire\.comp === p\.comp && pendingWire\.pin === p\.pin\}/.test(vc));
+    check("GATE: 有了起点就说下一步做什么，并给一条看得见、按得到的反悔路", /role="status" aria-live="polite" className="a11y-hint">\s*连线起点已选/.test(vc) && !/<button[^>]*onClick=\{cancelWire\}[^>]*hidden/.test(vc) && /onClick=\{cancelWire\}>[\s\S]{0,40}取消连线/.test(vc));
+    check("GATE: 端口清单的用法说明真挂在 DOM 上", /id="a11y-port-hint"/.test(vc) && /aria-describedby="a11y-port-hint"/.test(vc));
+    check("GATE: 端口按钮有 24px 命中高度，文字色是量得到的实色", /\.a11y-ports button\.a11y-port\s*\{[^}]*min-height: 24px[\s\S]{0,200}color: var\(--text\)/.test(css));
+    check("GATE: 缺线那一行带得出落点，不再只是一句文案", /openPorts\.push\(\{[\s\S]{0,180}text:/.test(a11yCode));
+    check("GATE: 手册写了两次回车完成一根连线", /未连接端口清单里按回车/.test(helpCode) && /再在另一行按回车/.test(helpCode));
   }
 
   /* GATE: 波形面板的颜色必须留在样式表里。写进行内 style 的颜色上面的对比度

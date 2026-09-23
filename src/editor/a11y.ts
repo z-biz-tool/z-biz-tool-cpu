@@ -88,10 +88,22 @@ export function neighbour(model: A11yModel, current: string | null, dir: "next" 
  * 把模型摊成读屏能直接念的两份清单：每个元件的端口一句话，再加一份"哪些脚没接线"。
  * 坐标在这里没有意义，所以只讲名称、方向、位宽与是否连上——缺线必须能被念出来。
  */
+/**
+ * 一个没接线的端口。text 是念给用户听的那句话，comp/pin 是"从这个端口开始连线"
+ * 要交给连线的落点 —— 只有文案的清单读屏能听却改不动，等于没替代鼠标。
+ */
+export interface OpenPort {
+  comp: string;
+  pin: string;
+  dir: "in" | "out";
+  width: number;
+  text: string;
+}
+
 export function portStructure(model: A11yModel): {
   labels: Map<string, string>;
   pins: Map<string, string>;
-  openPorts: string[];
+  openPorts: OpenPort[];
 } {
   const labels = new Map(model.comps.map((c) => [c.id, c.name || c.id]));
   const linked = new Set<string>();
@@ -100,12 +112,19 @@ export function portStructure(model: A11yModel): {
     linked.add(w.to);
   }
   const pins = new Map<string, string>();
-  const openPorts: string[] = [];
+  const openPorts: OpenPort[] = [];
   for (const c of model.comps) {
     const label = labels.get(c.id) ?? c.id;
     const parts = c.pins.map((p) => {
       const dir = p.dir === "in" ? "输入" : "输出";
-      if (!linked.has(`${c.id}.${p.id}`)) openPorts.push(`${label} 的${dir}脚 ${p.id}（${p.width} 位）未连接`);
+      if (!linked.has(`${c.id}.${p.id}`))
+        openPorts.push({
+          comp: c.id,
+          pin: p.id,
+          dir: p.dir,
+          width: p.width,
+          text: `${label} 的${dir}脚 ${p.id}（${p.width} 位）未连接`,
+        });
       return `${p.id} ${dir} ${p.width} 位`;
     });
     pins.set(c.id, parts.join("、") || "无引脚");
