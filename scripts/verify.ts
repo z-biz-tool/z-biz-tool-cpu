@@ -2066,11 +2066,183 @@ ok:
     const app = readFileSync(new URL("../src/App.tsx", import.meta.url).pathname, "utf8");
     const live = readFileSync(new URL("../src/editor/A11yAnnouncer.tsx", import.meta.url).pathname, "utf8");
     const help = readFileSync(new URL("../src/editor/panels/WatchPanels.tsx", import.meta.url).pathname, "utf8");
+    const canvas = readFileSync(new URL("../src/editor/Canvas.tsx", import.meta.url).pathname, "utf8");
     check("GATE: 播报区挂在应用根部", /import \{ A11yAnnouncer \}/.test(app) && /<A11yAnnouncer \/>/.test(app));
     check("GATE: 播报用 polite + atomic，不用 assertive", /role="status"/.test(live) && /aria-live="polite"/.test(live) && /aria-atomic="true"/.test(live) && !/assertive/.test(live));
     check("GATE: 开机第一眼不播（先把当前状态当基线）", /if \(!seen\.current\)/.test(live) && /factsKey\(facts\)/.test(live));
     check("GATE: 组件只负责接线，文案规则在 announce.ts", !/判题通过|已选中/.test(live) && /nextAnnouncement\(facts, seen\.current\)/.test(live));
     check("GATE: 手册写清读屏与 Tab 行为", /键盘与读屏/.test(help) && /读取当前引脚值/.test(help));
+    check("GATE: 画布自身可聚焦，快捷键与焦点环都可达", /tabIndex=\{0\}/.test(canvas));
+  }
+
+  /* CT: 对比度实测（doc 02 §10「支持高对比度」「焦点清晰可见」，目标 WCAG 2.2 AA）。
+   * 断言里不写死"这个颜色合格"：颜色一律从 src/index.css 现读（含 var() 间链），
+   * 亮度按 WCAG 相对亮度公式现算。于是把 .btn 描边改回 --edge、新引入一个过暗的
+   * 文字色、或者删掉焦点环，都会在这里立刻红。
+   * 全仓 color: 只有十六进制与 var() 两种写法（rgba 只用于装饰描边），可全量枚举。 */
+  {
+    const { readFileSync } = await import("node:fs");
+    const css = readFileSync(new URL("../src/index.css", import.meta.url).pathname, "utf8");
+    const plain = css.replace(/\/\*[\s\S]*?\*\//g, "");
+    const vars = new Map<string, string>();
+    for (const m of (/:root\s*\{([^}]*)\}/.exec(plain)?.[1] ?? "").matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)) {
+      vars.set(m[1], m[2].trim());
+    }
+    /** 解析一条颜色值：十六进制字面量或 rgba；var() 顺着链最多跳 3 层 */
+    function rawColor(value: string, depth = 0): string {
+      const v = value.trim();
+      if (/^(#[0-9a-fA-F]{3,8}|rgba?\([^)]*\))$/.test(v)) return v;
+      const ref = /^var\((--[\w-]+)\)/.exec(v);
+      if (!ref || depth > 3) return "";
+      const next = vars.get(ref[1]);
+      return next ? rawColor(next, depth + 1) : "";
+    }
+    const hexOf = (value: string) => {
+      const v = rawColor(value);
+      if (/^#[0-9a-fA-F]{6}$/.test(v)) return v.toLowerCase();
+      if (/^#[0-9a-fA-F]{3}$/.test(v)) return "#" + v.slice(1).split("").map((c) => c + c).join("").toLowerCase();
+      return "";
+    };
+    const chan = (hex: string) => {
+      const n = parseInt(hex.slice(1), 16);
+      return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+    };
+    const lum = (hex: string) => {
+      const [r, g, b] = chan(hex).map((v) => (v / 255 <= 0.03928 ? v / 255 / 12.92 : ((v / 255 + 0.055) / 1.055) ** 2.4));
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    };
+    const ratio = (a: string, b: string) => {
+      const [hi, lo] = [lum(a), lum(b)].sort((p, q) => q - p);
+      return (hi + 0.05) / (lo + 0.05);
+    };
+    /** 中性面：页面底 / 两块面板 / 按钮底 / 输入框底 / 标签底 */
+    const DARK = ["#0b0d14", "#10131c", "#151a26", "#1a2030", "#0d1018", "#1d2433"];
+    /** 把整份 CSS 摊平成 {选择器列表, 声明体}；@media 里的规则也被自然收进来 */
+    const rules = [...plain.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((m) => ({
+      sels: m[1].split(",").map((s) => s.trim()).filter(Boolean),
+      body: m[2],
+    }));
+    function declOf(sel: string, prop: string): string {
+      for (const r of rules) {
+        if (!r.sels.includes(sel)) continue;
+        const hit = new RegExp(`(?:^|[;\\s])${prop}\\s*:\\s*([^;]+)`).exec(r.body);
+        if (hit) return hit[1].trim();
+      }
+      return "";
+    }
+    /** 声明值里"颜色那一段"：兼容 border 简写（1px solid var(--x) 取末段） */
+    function colorIn(value: string): string {
+      const hits = value.match(/var\(--[\w-]+\)|#[0-9a-fA-F]{3,8}/g);
+      return hits ? hexOf(hits[hits.length - 1]) : "";
+    }
+    /** 控件相邻的颜色：自身有实色底就只比那一块，透明则要比遍所有中性面 */
+    function adjacents(sel: string): string[] {
+      const own = colorIn(declOf(sel, "background") || declOf(sel, "background-color"));
+      return own ? [own] : DARK;
+    }
+    function worst(fg: string, list: string[]) {
+      let min = Infinity;
+      let at = "";
+      for (const bg of list) {
+        const v = ratio(fg, bg);
+        if (v < min) {
+          min = v;
+          at = bg;
+        }
+      }
+      return { min, at };
+    }
+
+    /* 1) 文字色：正文最小 11 px，全部按 AA 的 4.5 门槛 */
+    let textN = 0;
+    let textMin = Infinity;
+    const textFails: string[] = [];
+    for (const r of rules) {
+      const rawC = /(?:^|[;\s])color\s*:\s*([^;]+)/.exec(r.body)?.[1]?.trim() ?? "";
+      if (!rawC) continue;
+      const sel = r.sels[0];
+      const fg = hexOf(rawC);
+      if (!fg) {
+        textFails.push(`${sel} 的文字色「${rawC}」解析不出实色`);
+        continue;
+      }
+      // 半透明底先合成，再拿合成结果当相邻面（见下面第 3 项的双端校验）
+      const rawB = rawColor(/(?:^|[;\s])background(?:-color)?\s*:\s*([^;]+)/.exec(r.body)?.[1]?.trim() ?? "");
+      if (/^rgba/.test(rawB)) continue;
+      const w = worst(fg, adjacents(sel));
+      textN++;
+      textMin = Math.min(textMin, w.min);
+      if (w.min < 4.5) textFails.push(`${sel} ${fg} on ${w.at} = ${w.min.toFixed(2)}`);
+    }
+    check(`CT: ${textN} 处文字与相邻底色实测 ≥4.5:1（最低 ${textMin.toFixed(2)}）`, textFails.length === 0, textFails.slice(0, 8).join(" | "));
+
+    /* 2) 控件边界：非文字对比度门槛 3:1（WCAG 1.4.11） */
+    const BORDERS: { sel: string; prop: string; on?: string }[] = [
+      { sel: ".btn", prop: "border" },
+      { sel: ".mini", prop: "border" },
+      { sel: ".search", prop: "border" },
+      { sel: ".field input", prop: "border" },
+      { sel: ".field textarea", prop: "border" },
+      { sel: ".asm-editor", prop: "border" },
+      { sel: ".pal-item:hover", prop: "border-color" },
+      { sel: ".pal-item.row > button.grow:hover", prop: "border-color" },
+      { sel: ".btn.danger", prop: "border-color" },
+      { sel: ".mini.danger:hover", prop: "border-color" },
+      { sel: ".btn.active", prop: "border-color" },
+      { sel: ".pal-item.on", prop: "border-color" },
+      { sel: "::-webkit-scrollbar-thumb", prop: "background", on: "track" },
+    ];
+    const borderFails: string[] = [];
+    let borderMin = Infinity;
+    for (const e of BORDERS) {
+      const fg = colorIn(declOf(e.sel, e.prop));
+      if (!fg) {
+        borderFails.push(`${e.sel} 的 ${e.prop} 解析不出实色`);
+        continue;
+      }
+      const w = worst(fg, e.on === "track" ? DARK : adjacents(e.sel));
+      borderMin = Math.min(borderMin, w.min);
+      if (w.min < 3) borderFails.push(`${e.sel} ${fg} on ${w.at} = ${w.min.toFixed(2)}`);
+    }
+    check(`CT: ${BORDERS.length} 类控件边界与相邻底色实测 ≥3:1（最低 ${borderMin.toFixed(2)}）`, borderFails.length === 0, borderFails.join(" | "));
+
+    /* 3) 「半透明底 + 实色文字」的规则：合成到它可能压住的最深/最浅中性面，两端都要过线 */
+    let blendN = 0;
+    let blendMin = Infinity;
+    const blendFails: string[] = [];
+    for (const r of rules) {
+      const rawC = /(?:^|[;\s])color\s*:\s*([^;]+)/.exec(r.body)?.[1]?.trim() ?? "";
+      const rawB = /(?:^|[;\s])background(?:-color)?\s*:\s*([^;]+)/.exec(r.body)?.[1]?.trim() ?? "";
+      const fg = hexOf(rawC);
+      const rgba = /^rgba\(([^)]*)\)$/.exec(rawColor(rawB));
+      if (!fg || !rgba) continue;
+      const p = rgba[1].split(",").map((x) => Number(x.trim()));
+      for (const under of ["#0b0d14", "#1a2030"]) {
+        const b = chan(under);
+        const mix =
+          "#" +
+          [0, 1, 2].map((i) => Math.round(p[3] * p[i] + (1 - p[3]) * b[i])).map((v) => v.toString(16).padStart(2, "0")).join("");
+        const v = ratio(fg, mix);
+        blendN++;
+        blendMin = Math.min(blendMin, v);
+        if (v < 4.5) blendFails.push(`${r.sels[0]} ${fg} on ${mix} = ${v.toFixed(2)}`);
+      }
+    }
+    check(`CT: ${blendN} 组半透明底合成后文字仍 ≥4.5:1（最低 ${blendMin.toFixed(2)}）`, blendFails.length === 0, blendFails.join(" | "));
+
+    /* 4) 焦点环：必须是可见的实线 outline，且与所有中性面 ≥3:1（WCAG 2.4.11 / 1.4.11） */
+    const focusBody = rules.find((r) => r.sels.includes(":focus-visible"))?.body ?? "";
+    const outline = /(?:^|[;\s])outline\s*:\s*([^;]+)/.exec(focusBody)?.[1]?.trim() ?? "";
+    const focusPx = Number(/(\d+(?:\.\d+)?)px/.exec(outline)?.[1] ?? 0);
+    const focusHex = hexOf(/var\(--[\w-]+\)|#[0-9a-fA-F]{3,8}/.exec(outline)?.[0] ?? "");
+    const focusMin = focusHex ? worst(focusHex, DARK).min : 0;
+    check(
+      `CT: 焦点环 ${focusPx}px ${outline.includes("solid") ? "实线" : "非实线"} ${focusHex}，与所有中性面最低 ${focusMin.toFixed(2)}:1`,
+      focusPx >= 2 && /\bsolid\b/.test(outline) && focusMin >= 3,
+      `outline: ${outline}`
+    );
+    check("CT: 没有任何控件用 outline: none 关掉焦点", !/outline\s*:\s*none/.test(plain));
+    check("CT: --edge 只作装饰分隔，控件描边统一走 --edge-strong", (plain.match(/var\(--edge-strong\)/g) ?? []).length >= 7 && !/\.btn\s*\{[^}]*border:\s*1px solid var\(--edge\)/.test(plain));
   }
 
   // AT-01..AT-12 全验收矩阵

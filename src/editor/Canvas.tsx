@@ -196,6 +196,7 @@ export default function Canvas() {
       <canvas
         ref={canvasRef}
         className="canvas"
+        tabIndex={0}
         aria-label="电路画布：拖动摆放元件、拉线连接端口"
         aria-describedby="canvas-a11y-sum"
         onPointerDown={onPointerDown}

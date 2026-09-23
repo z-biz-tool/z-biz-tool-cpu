@@ -7,9 +7,21 @@
   --panel: #10131c;
   --panel-2: #151a26;
   --edge: #262d3c;
+  /* 控件描边：--edge 与六块控件底的对比只有 1.13~1.41，低视力用户看不出
+     "哪里是个能按的东西"（WCAG 1.4.11 要求控件边界 ≥3:1）。装饰性分隔线继续
+     用 --edge，按钮/输入框/悬停反馈这些"标识控件"的描边用它。
+     #6a7482 是实测过阈值里最暗的一档：与最深的面板 4.10、与最亮的控件底
+     #1a2030 仍有 3.43，留出浮点与抗锯齿余量。 */
+  --edge-strong: #6a7482;
   --text: #e5e7eb;
   --dim: #8b93a7;
   --accent: #a78bfa;
+  /* 焦点环：--accent 在所有面板/控件底上都有 5.71~7.13（WCAG 2.4.13 要 ≥3），
+     所以复用紫色高光，不引入新颜色。 */
+  --focus: var(--accent);
+  /* 危险控件描边：#5b2a32 与按钮底只差 1.41，看不出这是"会删东西"的按钮；
+     提到 #a5566a 后与四块底为 3.20~3.75，仍保持红色系。 */
+  --danger-edge: #a5566a;
   --accent-soft: rgba(167, 139, 250, 0.16);
   --ok: #34d399;
   --bad: #f87171;
@@ -36,12 +48,34 @@ body {
   overflow: hidden;
 }
 
+/* 焦点环（doc 02 §10「焦点清晰可见」，WCAG 2.4.11 / 2.4.13）。
+ * 三条原则：
+ * 1) 只作用于键盘焦点（:focus-visible），点按钮不留蓝框；
+ * 2) outline 而非 box-shadow —— outline 跟着 border-radius 走，且在
+ *    forced-colors（高对比度模式）下会被系统笔色替换而不会被抹掉；
+ * 3) 线宽 ≥2 px 且与所有面板/控件底对比 ≥3:1（--focus 实测 5.71~7.13）。
+ * 原先 .search / .field input / .asm-editor 各自写了 outline: none 并只把
+ * 描边换成紫色，1 px 描边既达不到 3:1 也超出焦点环可识别范围，已全部删除。 */
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+/* 深色面板上的原生 range/checkbox 在 macOS Safari/Chrome 里 outline 会被
+   控件自身裁剪，补一层同色的背景环保证看得见 */
+input[type="range"]:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 3px;
+  border-radius: 999px;
+}
+
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 ::-webkit-scrollbar-thumb {
-  background: #2c3444;
+  /* 滚动条滑块也是控件（WCAG 1.4.11 覆盖"能被操作的界面部件"），
+     原来的 #2c3444 与面板底只有 1.6，直接复用控件描边色。 */
+  background: var(--edge-strong);
   border-radius: 4px;
 }
 ::-webkit-scrollbar-track {
@@ -186,7 +220,7 @@ body {
 /* 原生按钮：工具条、面板里大量复用 */
 .btn {
   appearance: none;
-  border: 1px solid var(--edge);
+  border: 1px solid var(--edge-strong);
   background: #1a2030;
   color: var(--text);
   border-radius: 6px;
@@ -221,7 +255,7 @@ body {
   color: #ddd2ff;
 }
 .btn.danger {
-  border-color: #5b2a32;
+  border-color: var(--danger-edge);
   color: #ffb4b4;
 }
 .btn.danger:hover:not(:disabled) {
@@ -258,7 +292,7 @@ body {
 }
 .mini {
   appearance: none;
-  border: 1px solid var(--edge);
+  border: 1px solid var(--edge-strong);
   background: transparent;
   color: var(--dim);
   border-radius: 5px;
@@ -274,7 +308,7 @@ body {
 }
 .mini.danger:hover {
   color: #ffb4b4;
-  border-color: #6b3038;
+  border-color: var(--danger-edge);
 }
 
 /* ------------------------------ 画布 ------------------------------ */
@@ -379,10 +413,9 @@ body {
   margin: 8px;
   padding: 5px 8px;
   border-radius: 6px;
-  border: 1px solid var(--edge);
+  border: 1px solid var(--edge-strong);
   background: #0d1018;
   color: var(--text);
-  outline: none;
 }
 .search:focus {
   border-color: var(--accent);
@@ -415,7 +448,7 @@ body {
 .pal-head em {
   margin-left: auto;
   font-style: normal;
-  color: #5b6478;
+  color: var(--dim);
 }
 .caret {
   width: 10px;
@@ -441,7 +474,7 @@ body {
   text-align: left;
 }
 .pal-item:hover {
-  border-color: var(--edge);
+  border-color: var(--edge-strong);
 }
 .pal-item.on {
   border-color: var(--accent);
@@ -466,7 +499,7 @@ body {
   cursor: pointer;
 }
 .pal-item.row > button.grow:hover {
-  border-color: var(--edge);
+  border-color: var(--edge-strong);
 }
 .pal-item.row.on > button.grow {
   border-color: var(--accent);
@@ -604,11 +637,10 @@ body {
 .field textarea {
   padding: 4px 6px;
   border-radius: 6px;
-  border: 1px solid var(--edge);
+  border: 1px solid var(--edge-strong);
   background: #0d1018;
   color: var(--text);
   font-size: 12px;
-  outline: none;
   font-family: inherit;
   width: 100%;
 }
@@ -811,7 +843,7 @@ body {
 .checks .c em {
   font-style: normal;
   font-family: var(--mono);
-  color: #6b7590;
+  color: var(--dim);
 }
 .checks .c.ok::first-letter,
 .checks li.ok > .t {
@@ -834,14 +866,13 @@ body {
   min-height: 210px;
   padding: 8px;
   border-radius: 8px;
-  border: 1px solid var(--edge);
+  border: 1px solid var(--edge-strong);
   background: #0d1018;
   color: #dbe3f0;
   font-family: var(--mono);
   font-size: 12px;
   line-height: 1.55;
   resize: vertical;
-  outline: none;
   tab-size: 2;
 }
 .asm-editor:focus {
@@ -971,7 +1002,7 @@ body {
   color: #fca5a5;
 }
 .log-t {
-  color: #5b6478;
+  color: var(--dim);
   width: 34px;
   flex: none;
   text-align: right;
