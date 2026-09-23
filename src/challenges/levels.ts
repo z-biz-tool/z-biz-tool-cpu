@@ -1509,7 +1509,267 @@ const M2: Level[] = [
   },
 ];
 
-export const STORAGE_LEVELS: Level[] = [...M1, ...M2];
+/* ---------------- 世界 M3 写慢擦快（浮栅） ---------------- */
+
+/** n 个擦除请求：E 高一拍、低一拍，共 2n 拍 */
+const erasePulses = (n: number): Level["tests"][number]["phases"] =>
+  Array.from({ length: n }, () => [
+    { inputs: { E: 1 }, steps: 1 },
+    { inputs: { E: 0 }, steps: 1 },
+  ]).flat();
+
+const M3: Level[] = [
+  {
+    id: "m3-1-slowprog",
+    tier: 6,
+    name: "写慢读快",
+    brief:
+      "浮栅位元 FG 出厂是 1（擦除态）。把它编成 0 得让 P 上的脉冲足足顶满 8 拍——中途撒手就前功尽弃。先试 3 拍短脉冲，再来一次满 8 拍，最后用 E 擦一下看 PE 计数。",
+    teach:
+      "闪存不是电容：电子要隧穿进浮栅，写就是慢慢充电，读却随手一看。而且写慢的不止是速度——擦除还会累计磨损，这块 P/E 账本 sts 会替你记着。" +
+      "SSD 写入慢、寿命有限的物理根源，就是这只小元件。",
+    available: ["input", "output", "clock", "FGCELL", "and", "or", "not", "const"],
+    skeleton: () =>
+      circuit([
+        clkSrc("CLK", 0, 0),
+        ioIn("P", 4, 1),
+        ioIn("E", 8, 1),
+        comp("fg", "FGCELL", 16, 0, { programTicks: 8, peLimit: 100 }, { name: "FG" }),
+        ioOut("Q", 36, 0, 1),
+        ioOut("PE", 36, 5, 8),
+      ]),
+    tests: [
+      {
+        name: "3 拍短脉冲写不动",
+        phases: [
+          { inputs: { P: 1, E: 0 }, steps: 3 },
+          { inputs: { P: 0 }, steps: 2 },
+        ],
+        outputs: { Q: 1, PE: 0 },
+      },
+      {
+        name: "满 8 拍脉冲才置 0",
+        phases: [
+          { inputs: { P: 1 }, steps: 8 },
+          { inputs: { P: 0 }, steps: 1 },
+        ],
+        outputs: { Q: 0, PE: 0 },
+      },
+      {
+        name: "擦除立即回 1，并记一次 P/E",
+        phases: [
+          { inputs: { P: 1 }, steps: 8 },
+          { inputs: { P: 0 }, steps: 1 },
+          { inputs: { E: 1 }, steps: 1 },
+          { inputs: { E: 0 }, steps: 2 },
+        ],
+        outputs: { Q: 1, PE: 1 },
+      },
+    ],
+    hint: "P→FG.PROG、E→FG.ERASE。感受时序：PROG 是累计计数，短脉冲虽然没写成，计数不清零——攒够 8 拍照样写进去。",
+  },
+  {
+    id: "m3-2-blockerase",
+    tier: 6,
+    name: "整块一起擦",
+    brief:
+      "F0..F3 四格是一块（编程脉宽 4 拍）。ADDR 选中格子、WR 给编程脉冲：先编 F2，再编 F0 和 F3，最后一拍 ERASE——看整块的下场。",
+    teach:
+      "闪存可以按位把 1 写成 0，擦却只能整块全部回 1。这种不对称的粒度是 FTL 存在的全部理由：想擦一块，得先把里面的活数据搬到别处。" +
+      "PE 已经开始记账，m3-3 要跟你算总账。",
+    available: ["input", "output", "clock", "FGCELL", "demux", "mux", "and", "or", "not", "const"],
+    skeleton: () =>
+      circuit([
+        clkSrc("CLK", 0, 0),
+        ioIn("ADDR", 4, 2),
+        ioIn("WR", 8, 1),
+        ioIn("ERASE", 12, 1),
+        comp("f0", "FGCELL", 20, 0, { programTicks: 4, peLimit: 100 }, { name: "F0" }),
+        comp("f1", "FGCELL", 20, 5, { programTicks: 4, peLimit: 100 }, { name: "F1" }),
+        comp("f2", "FGCELL", 20, 10, { programTicks: 4, peLimit: 100 }, { name: "F2" }),
+        comp("f3", "FGCELL", 20, 15, { programTicks: 4, peLimit: 100 }, { name: "F3" }),
+        ioOut("Q0", 40, 1, 1),
+        ioOut("Q1", 40, 6, 1),
+        ioOut("Q2", 40, 11, 1),
+        ioOut("Q3", 40, 16, 1),
+      ]),
+    tests: [
+      {
+        name: "编程 F2 置 0",
+        phases: [
+          { inputs: { ADDR: 2, WR: 1 }, steps: 4 },
+          { inputs: { ADDR: 0, WR: 0 }, steps: 1 },
+        ],
+        outputs: { Q0: 1, Q1: 1, Q2: 0, Q3: 1 },
+      },
+      {
+        name: "编完三格回头看",
+        phases: [
+          { inputs: { ADDR: 2, WR: 1 }, steps: 4 },
+          { inputs: { ADDR: 0, WR: 1 }, steps: 4 },
+          { inputs: { ADDR: 3, WR: 1 }, steps: 4 },
+          { inputs: { WR: 0 }, steps: 1 },
+        ],
+        outputs: { Q0: 0, Q1: 1, Q2: 0, Q3: 0 },
+      },
+      {
+        name: "擦除一拍，整块回 1",
+        phases: [
+          { inputs: { ADDR: 2, WR: 1 }, steps: 4 },
+          { inputs: { ADDR: 0, WR: 1 }, steps: 4 },
+          { inputs: { ADDR: 3, WR: 1 }, steps: 4 },
+          { inputs: { WR: 0 }, steps: 1 },
+          { inputs: { ERASE: 1 }, steps: 1 },
+          { inputs: { ERASE: 0 }, steps: 1 },
+        ],
+        outputs: { Q0: 1, Q1: 1, Q2: 1, Q3: 1 },
+      },
+    ],
+    hint: "译码器把 ADDR 摊成四根线，各 AND 一把 WR 接到对应格的 PROG；ERASE 是全块共享的，直接并到四格。",
+  },
+  {
+    id: "m3-3-wear",
+    tier: 6,
+    name: "寿命配额",
+    brief:
+      "F0..F3 每格只经得起 3 次 P/E（peLimit=3），超了 sts 就拉响。系统会在 E 上接连发来擦除请求：先来 4 个，再来 12 个。搭一套『轮转』——每个请求只擦一格，轮流雨露均沾。",
+    teach:
+      "磨损均衡的本质：别把擦除固定砸在同一块上。一个计数器加一个译码器就是最小的磨损均衡控制器。" +
+      "别小看它——SSD 主控里跑着的就是这套循环的复杂版：热数据搬家、块轮换、账本清算。",
+    available: ["input", "output", "clock", "FGCELL", "demux", "counter", "and", "or", "not", "const"],
+    skeleton: () =>
+      circuit([
+        clkSrc("CLK", 0, 0),
+        ioIn("E", 4, 1),
+        comp("f0", "FGCELL", 20, 0, { programTicks: 2, peLimit: 3 }, { name: "F0" }),
+        comp("f1", "FGCELL", 20, 5, { programTicks: 2, peLimit: 3 }, { name: "F1" }),
+        comp("f2", "FGCELL", 20, 10, { programTicks: 2, peLimit: 3 }, { name: "F2" }),
+        comp("f3", "FGCELL", 20, 15, { programTicks: 2, peLimit: 3 }, { name: "F3" }),
+        ioOut("PE0", 40, 1, 8),
+        ioOut("PE1", 40, 6, 8),
+        ioOut("PE2", 40, 11, 8),
+        ioOut("PE3", 40, 16, 8),
+        ioOut("S0", 46, 1, 1),
+        ioOut("S1", 46, 6, 1),
+        ioOut("S2", 46, 11, 1),
+        ioOut("S3", 46, 16, 1),
+      ]),
+    tests: [
+      {
+        name: "4 次擦除，每格一次",
+        phases: erasePulses(4),
+        outputs: { PE0: 1, PE1: 1, PE2: 1, PE3: 1, S0: 0, S1: 0, S2: 0, S3: 0 },
+      },
+      {
+        name: "12 次擦除，无一格阵亡",
+        phases: erasePulses(12),
+        outputs: { PE0: 3, PE1: 3, PE2: 3, PE3: 3, S0: 0, S1: 0, S2: 0, S3: 0 },
+      },
+    ],
+    hint: "计数器 en=E、输出接译码器 sel；第 k 格的 ERASE = E AND 译码第 k 根。计数器随请求前进，擦除点就一直轮转。",
+  },
+];
+
+/* ---------------- 世界 M4 翻译层（FTL） ---------------- */
+
+const M4: Level[] = [
+  {
+    id: "m4-1-logwrite",
+    tier: 6,
+    name: "新页写入",
+    brief:
+      "改一个块的值不许原地覆盖：WR 到来时，把 {块号,值} 拼成 3 位字追加进日志 LOG（地址来自写指针 CNT，每次 +1），同时更新映射 MAP[BLK]=VAL。把 A 改写两遍，看新旧两版在 LOG 里共存。",
+    teach:
+      "FTL 的第一守则：介质不能原地重写，于是写入永远追加到新页，映射表指向最新版。" +
+      "LOG 留着全部历史（快照、垃圾回收的原料），MAP 才是主机眼里的世界。写指针就是空闲页分配器。",
+    available: ["input", "output", "clock", "ram", "counter", "split", "merge", "demux", "mux", "and", "or", "not", "const"],
+    skeleton: () =>
+      circuit([
+        clkSrc("CLK", 0, 0),
+        ioIn("BLK", 4, 1),
+        ioIn("VAL", 8, 2),
+        ioIn("WR", 12, 1),
+        memComp("LOG", 20, 0, "ram", 3, 2, ""),
+        memComp("MAP", 20, 8, "ram", 2, 1, ""),
+      ]),
+    tests: [
+      {
+        name: "写 A=1、B=2，再改写 A=3",
+        phases: [
+          { inputs: { BLK: 0, VAL: 1, WR: 1 }, steps: 1 },
+          { inputs: { BLK: 1, VAL: 2, WR: 1 }, steps: 1 },
+          { inputs: { BLK: 0, VAL: 3, WR: 1 }, steps: 1 },
+          { inputs: { WR: 0 }, steps: 1 },
+        ],
+        mem: [
+          { name: "LOG", at: 0, expect: 1 },
+          { name: "LOG", at: 1, expect: 6 },
+          { name: "LOG", at: 2, expect: 3 },
+          { name: "LOG", at: 3, expect: 0 },
+          { name: "MAP", at: 0, expect: 3 },
+          { name: "MAP", at: 1, expect: 2 },
+        ],
+        outputs: { CNT: 3 },
+      },
+      {
+        name: "只写一次，LOG 与 MAP 一致",
+        phases: [
+          { inputs: { BLK: 1, VAL: 2, WR: 1 }, steps: 1 },
+          { inputs: { WR: 0 }, steps: 1 },
+        ],
+        mem: [
+          { name: "LOG", at: 0, expect: 6 },
+          { name: "MAP", at: 1, expect: 2 },
+        ],
+        outputs: { CNT: 1 },
+      },
+    ],
+    hint: "VAL 拆成两根线、跟 BLK 合成 3 位字喂 LOG.din；LOG.addr 接 2 位计数器 CNT（en=WR）；MAP.addr=BLK、MAP.din=VAL，写使能都是 WR。",
+  },
+  {
+    id: "m4-2-waf",
+    tier: 6,
+    name: "写放大",
+    brief:
+      "主机一次只摸一个块，介质却不能原地重写：整块（两格）都得搬到新页。FILE 是主机视图（FILE[BLK]=VAL 原地写），LOG 是介质日志。搭『晚一拍追加』：先落 FILE，下一拍把整块重写进 LOG。看看主机写 2 次、介质写几页。",
+    teach:
+      "写放大 WAF = 介质页写入数 ÷ 主机写入数。数据越散，整块重写越亏——这是 TRIM 和紧凑回收存在的理由。" +
+      "晚一拍用一个 dff 打这拍：写先落地，搬随其后——真实 FTL 的写流水线就是这么起步的。",
+    available: ["input", "output", "clock", "ram", "counter", "dff", "split", "merge", "demux", "mux", "and", "or", "not", "const"],
+    skeleton: () =>
+      circuit([
+        clkSrc("CLK", 0, 0),
+        ioIn("BLK", 4, 1),
+        ioIn("VAL", 8, 2),
+        ioIn("WR", 12, 1),
+        memComp("FILE", 20, 0, "ram", 2, 1, ""),
+        memComp("LOG", 20, 8, "ram", 2, 2, ""),
+      ]),
+    tests: [
+      {
+        name: "主机写 2 次，介质写 4 页",
+        phases: [
+          { inputs: { BLK: 0, VAL: 1, WR: 1 }, steps: 2 },
+          { inputs: { WR: 0 }, steps: 2 },
+          { inputs: { BLK: 1, VAL: 2, WR: 1 }, steps: 2 },
+          { inputs: { WR: 0 }, steps: 2 },
+        ],
+        mem: [
+          { name: "FILE", at: 0, expect: 1 },
+          { name: "FILE", at: 1, expect: 2 },
+          { name: "LOG", at: 0, expect: 1 },
+          { name: "LOG", at: 1, expect: 0 },
+          { name: "LOG", at: 2, expect: 1 },
+          { name: "LOG", at: 3, expect: 2 },
+        ],
+        outputs: { CNT: 4 },
+      },
+    ],
+    hint: "dff 把 WR 晚一拍变成 APP。FILE.addr = APP ? CNT 末位 : BLK；LOG.addr = CNT 低 2 位（3 位计数器拆线再合线）、LOG.din = FILE 的 dout、LOG.wen = APP、CNT.en = APP。",
+  },
+];
+
+export const STORAGE_LEVELS: Level[] = [...M1, ...M2, ...M3, ...M4];
 
 export function levelById(id: string): Level | undefined {
   return LEVELS.find((l) => l.id === id) ?? STORAGE_LEVELS.find((l) => l.id === id);

@@ -3183,7 +3183,7 @@ ok:
   /* 存储书全量通用环：每关参考解答全过 + 裸骨架不能白拿通关 */
   {
     check("BK: CPU 书仍是 31 关（存储书不进 LEVELS）", LEVELS.length === 31, `len=${LEVELS.length}`);
-    check("BK: 存储书 7 关上架", STORAGE_LEVELS.length === 7, `len=${STORAGE_LEVELS.length}`);
+    check("BK: 存储书 12 关上架", STORAGE_LEVELS.length === 12, `len=${STORAGE_LEVELS.length}`);
     for (const l of STORAGE_LEVELS) {
       const sol = solutionDesign(l);
       const judged = sol ? runLevelTests(l, sol) : undefined;

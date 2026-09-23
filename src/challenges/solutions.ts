@@ -1016,4 +1016,117 @@ export const SOLUTIONS: Record<string, Fix> = {
       [derr, "out", "DERR", "in"],
     ]);
   }),
+  "m3-1-slowprog": onRoot((b) => {
+    b.link([
+      ["CLK", "out", "fg", "CLK"],
+      ["P", "out", "fg", "PROG"],
+      ["E", "out", "fg", "ERASE"],
+      ["fg", "Q", "Q", "in"],
+      ["fg", "PE", "PE", "in"],
+    ]);
+  }),
+  "m3-2-blockerase": onRoot((b) => {
+    /* 编程走地址译码，擦除是全块一根线 */
+    const dec = b.add("demux", 16, 0, { inputs: 4 });
+    b.link([
+      ["CLK", "out", "f0", "CLK"],
+      ["CLK", "out", "f1", "CLK"],
+      ["CLK", "out", "f2", "CLK"],
+      ["CLK", "out", "f3", "CLK"],
+      ["ADDR", "out", dec, "sel"],
+      ["ERASE", "out", "f0", "ERASE"],
+      ["ERASE", "out", "f1", "ERASE"],
+      ["ERASE", "out", "f2", "ERASE"],
+      ["ERASE", "out", "f3", "ERASE"],
+    ]);
+    for (let k = 0; k < 4; k++) {
+      const w = b.add("and", 18, k * 5, {});
+      b.link([
+        ["WR", "out", w, "i0"],
+        [dec, "o" + k, w, "i1"],
+        [w, "out", "f" + k, "PROG"],
+        ["f" + k, "Q", "Q" + k, "in"],
+      ]);
+    }
+  }),
+  "m3-3-wear": onRoot((b) => {
+    /* 轮转磨损均衡：请求计数 → 译码，每次只擦一格 */
+    const cnt = b.add("counter", 12, 20, { bitWidth: 2 });
+    const dec = b.add("demux", 16, 20, { inputs: 4 });
+    b.link([
+      ["CLK", "out", cnt, "clk"],
+      ["CLK", "out", "f0", "CLK"],
+      ["CLK", "out", "f1", "CLK"],
+      ["CLK", "out", "f2", "CLK"],
+      ["CLK", "out", "f3", "CLK"],
+      ["E", "out", cnt, "en"],
+      [cnt, "out", dec, "sel"],
+    ]);
+    for (let k = 0; k < 4; k++) {
+      const e = b.add("and", 18, k * 5, {});
+      b.link([
+        ["E", "out", e, "i0"],
+        [dec, "o" + k, e, "i1"],
+        [e, "out", "f" + k, "ERASE"],
+        ["f" + k, "PE", "PE" + k, "in"],
+        ["f" + k, "STS", "S" + k, "in"],
+      ]);
+    }
+  }),
+  "m4-1-logwrite": onRoot((b) => {
+    /* 追加 {BLK,VAL} 进 LOG（地址=写指针），MAP[BLK]=VAL 指到最新版 */
+    const cnt = b.add("counter", 14, 14, { bitWidth: 2 }, { name: "CNT" });
+    const sp = b.add("split", 14, 0, { bitWidth: 2 });
+    const mg = b.add("merge", 17, 2, { bitWidth: 3 });
+    b.link([
+      ["CLK", "out", "LOG", "clk"],
+      ["CLK", "out", "MAP", "clk"],
+      ["CLK", "out", cnt, "clk"],
+      ["WR", "out", "LOG", "wen"],
+      ["WR", "out", "MAP", "wen"],
+      ["WR", "out", cnt, "en"],
+      [cnt, "out", "LOG", "addr"],
+      ["VAL", "out", sp, "in"],
+      [sp, "b0", mg, "b0"],
+      [sp, "b1", mg, "b1"],
+      ["BLK", "out", mg, "b2"],
+      [mg, "out", "LOG", "din"],
+      ["BLK", "out", "MAP", "addr"],
+      ["VAL", "out", "MAP", "din"],
+    ]);
+  }),
+  "m4-2-waf": onRoot((b) => {
+    /* 写放大流水线：dff 把 WR 晚一拍成 APP——先落主机视图，下一拍整块重写进日志。
+       APP 期间 FILE 的地址已切到追加源，FILE.wen = WR·¬APP 掐掉重叠期的误写 */
+    const dly = b.add("dff", 14, 8, {});
+    const nw = b.add("not", 14, 12, { inputs: 1 });
+    const wen = b.add("and", 16, 10, {});
+    const cnt = b.add("counter", 17, 14, { bitWidth: 3 }, { name: "CNT" });
+    const sp = b.add("split", 20, 14, { bitWidth: 3 });
+    const la = b.add("merge", 23, 14, { bitWidth: 2 });
+    const fa = b.add("mux", 24, 0, { inputs: 2 });
+    b.link([
+      ["CLK", "out", "FILE", "clk"],
+      ["CLK", "out", "LOG", "clk"],
+      ["CLK", "out", dly, "clk"],
+      ["CLK", "out", cnt, "clk"],
+      ["WR", "out", dly, "d"],
+      [dly, "q", nw, "i0"],
+      ["WR", "out", wen, "i0"],
+      [nw, "out", wen, "i1"],
+      [wen, "out", "FILE", "wen"],
+      ["VAL", "out", "FILE", "din"],
+      [dly, "q", fa, "sel"],
+      ["BLK", "out", fa, "i0"],
+      [sp, "b0", fa, "i1"],
+      [fa, "out", "FILE", "addr"],
+      [dly, "q", cnt, "en"],
+      [cnt, "out", sp, "in"],
+      [sp, "b0", la, "b0"],
+      [sp, "b1", la, "b1"],
+      [la, "out", "LOG", "addr"],
+      ["FILE", "dout", "LOG", "din"],
+      [dly, "q", "LOG", "wen"],
+    ]);
+  }),
 };
