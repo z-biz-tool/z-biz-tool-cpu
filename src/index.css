@@ -1427,3 +1427,77 @@ input[type="range"]:focus-visible {
   font-size: 10px;
   opacity: 0.85;
 }
+
+/* 书架首页：3 张大封面卡 */
+.shelf-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.shelf {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+.book-cover {
+  appearance: none;
+  background: linear-gradient(160deg, #1a2030 0%, #131826 100%);
+  border: 1px solid var(--edge);
+  border-radius: 10px;
+  padding: 12px 14px;
+  text-align: left;
+  color: var(--text);
+  cursor: pointer;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-rows: auto auto auto;
+  column-gap: 12px;
+  row-gap: 4px;
+  transition: transform 0.12s, border-color 0.12s, background 0.12s;
+}
+.book-cover:hover {
+  border-color: var(--accent);
+  transform: translateY(-1px);
+}
+.book-cover.done {
+  border-color: var(--ok);
+}
+.cover-glyph {
+  grid-row: 1 / span 3;
+  font-size: 28px;
+  align-self: center;
+  color: var(--accent);
+}
+.cover-title {
+  font-size: 15px;
+  font-weight: 600;
+}
+.cover-sub {
+  font-size: 11px;
+  color: var(--dim);
+  grid-column: 2;
+}
+.cover-blurb {
+  grid-column: 2;
+  font-size: 11px;
+  color: var(--dim);
+  line-height: 1.55;
+}
+.cover-progress {
+  grid-column: 1 / span 2;
+  margin-top: 6px;
+}
+
+/* 书内返回按钮 */
+.book-back {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  color: var(--dim);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0 0 6px;
+}
+.book-back:hover {
+  color: var(--text);
+}

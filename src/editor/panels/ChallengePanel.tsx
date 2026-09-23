@@ -42,11 +42,11 @@ export default function ChallengePanel() {
   const level = levelById(levelId ?? "");
   const score = scoreOf(progress);
   const [gapAsk, setGapAsk] = useState<GapAsk | null>(null);
-  /** 当前翻开的书：null = 全开；否则只显该书的世界 */
-  const [book, setBook] = useState<"all" | "logic" | "memory" | "fast">("all");
-  /** doc 02 §5.3：顶栏「书架」按钮触发回到全览 */
+  /** 当前翻开的书：null = 在首页书架；logic/memory/fast = 进入该书 */
+  const [book, setBook] = useState<null | "logic" | "memory" | "fast">(null);
+  /** doc 02 §5.3：顶栏「书架」按钮触发回到首页 */
   useEffect(() => {
-    (window as { __resetBookTo?: () => void }).__resetBookTo = () => setBook("all");
+    (window as { __resetBookTo?: () => void }).__resetBookTo = () => setBook(null);
     return () => {
       delete (window as { __resetBookTo?: () => void }).__resetBookTo;
     };
@@ -63,53 +63,97 @@ export default function ChallengePanel() {
     setGapAsk({ id, missing, catchup: catchupLevels(p, id) });
   };
 
-  return (
-    <div className="panel-body">
-      <div className="book-saver" role="tablist" aria-label="选择书">
-        <button
-          className={"book-tab" + (book === "all" ? " on" : "")}
-          onClick={() => setBook("all")}
-        >
-          全部
-          <span className="mono">
-            {LEVELS.length + STORAGE_LEVELS.length + FAST_LEVELS.length}
+  if (book === null) {
+    /* 首页书架：三张大封面卡 */
+    const books = [
+      {
+        key: "logic" as const,
+        glyph: "⛁",
+        title: "CPU 书",
+        sub: "《从门到一台 Z16》",
+        blurb: "31 关 · 5 个世界（逻辑门→组合→时序→造 CPU→存储体系）",
+        list: LEVELS,
+      },
+      {
+        key: "memory" as const,
+        glyph: "☰",
+        title: "存储书",
+        sub: "《囚禁电荷》",
+        blurb: "18 关 · 6 个世界（DRAM/Flash/FTL/磁盘金字塔与掉电）",
+        list: STORAGE_LEVELS,
+      },
+      {
+        key: "fast" as const,
+        glyph: "⇉",
+        title: "优化书",
+        sub: "《流水线与之后的一切》",
+        blurb: "8 关 · 2 个世界（切长路径 / 控制冒险）",
+        list: FAST_LEVELS,
+      },
+    ];
+    return (
+      <div className="panel-body shelf-body">
+        <div className="head">
+          <span className="title">书架</span>
+          <span className="tag">
+            {score.levels}/{LEVELS.length + STORAGE_LEVELS.length + FAST_LEVELS.length} 关
           </span>
-        </button>
-        <button
-          className={"book-tab" + (book === "logic" ? " on" : "")}
-          onClick={() => setBook("logic")}
-          aria-pressed={book === "logic"}
-        >
-          CPU 书
-          <span className="mono">{scoreOfBookLevels(progress, LEVELS)}/{LEVELS.length}</span>
-        </button>
-        <button
-          className={"book-tab" + (book === "memory" ? " on" : "")}
-          onClick={() => setBook("memory")}
-          aria-pressed={book === "memory"}
-        >
-          存储书
-          <span className="mono">{scoreOfBookLevels(progress, STORAGE_LEVELS)}/{STORAGE_LEVELS.length}</span>
-        </button>
-        <button
-          className={"book-tab" + (book === "fast" ? " on" : "")}
-          onClick={() => setBook("fast")}
-          aria-pressed={book === "fast"}
-        >
-          优化书
-          <span className="mono">{scoreOfBookLevels(progress, FAST_LEVELS)}/{FAST_LEVELS.length}</span>
+          <span className="tag">成就 {score.badges}/{BADGES.length}</span>
+        </div>
+        <p className="panel-note">选一本书开始学习。每本书的元件会随关卡通关而逐步解锁。</p>
+        <div className="shelf">
+          {books.map((b) => {
+            const done = scoreOfBookLevels(progress, b.list);
+            const total = b.list.length;
+            const pct = Math.round((done / total) * 100);
+            const finished = done === total;
+            return (
+              <button
+                key={b.key}
+                className={"book-cover" + (finished ? " done" : "")}
+                onClick={() => setBook(b.key)}
+              >
+                <span className="cover-glyph">{b.glyph}</span>
+                <span className="cover-title">{b.title}</span>
+                <span className="cover-sub">{b.sub}</span>
+                <span className="cover-blurb">{b.blurb}</span>
+                <div className="cover-progress">
+                  <Progress
+                    percent={pct}
+                    size="small"
+                    format={() => `${done}/${total}`}
+                    status={finished ? "success" : "active"}
+                  />
+                </div>
+              </button>
+            );
+          })}
+        </div>
+        <button className="btn wide" onClick={() => st().openSandbox()}>
+          进入自由搭建沙盒
         </button>
       </div>
+    );
+  }
+
+  /* 进入某书：顶部返回按钮 + 关卡列表 */
+  const bookTitle = book === "logic" ? "CPU 书" : book === "memory" ? "存储书" : "优化书";
+  return (
+    <div className="panel-body">
+      <button className="book-back" onClick={() => setBook(null)}>
+        ← 返回书架
+      </button>
       <div className="head">
-        <span className="title">关卡</span>
+        <span className="title">{bookTitle}</span>
         <span className="tag">
-          {score.levels}/{LEVELS.length} 关
+          {scoreOfBookLevels(progress, book === "logic" ? LEVELS : book === "memory" ? STORAGE_LEVELS : FAST_LEVELS)}/
+          {(book === "logic" ? LEVELS : book === "memory" ? STORAGE_LEVELS : FAST_LEVELS).length} 关
         </span>
         <span className="tag">成就 {score.badges}/{BADGES.length}</span>
       </div>
 
       <div className="level-list">
-        {(book === "all" || book === "logic") &&
+        {(book === "logic") &&
           TIERS.map((t) => {
           const list = LEVELS.filter((l) => l.tier === t.tier);
           const { ok, total } = tierDone(progress, t.tier);
@@ -151,10 +195,10 @@ export default function ChallengePanel() {
         })}
       </div>
 
-      {(book === "all" || book === "memory") && (
+      {(book === "memory") && (
         <StorageSection progress={progress} levelId={levelId} onOpen={openLevel} />
       )}
-      {(book === "all" || book === "fast") && (
+      {(book === "fast") && (
         <FastSection progress={progress} levelId={levelId} onOpen={openLevel} />
       )}
 
