@@ -73,6 +73,7 @@ export default function ChallengePanel() {
         sub: "《从门到一台 Z16》",
         blurb: "31 关 · 5 个世界（逻辑门→组合→时序→造 CPU→存储体系）",
         list: LEVELS,
+        theme: "theme-cpu",
       },
       {
         key: "memory" as const,
@@ -81,6 +82,7 @@ export default function ChallengePanel() {
         sub: "《囚禁电荷》",
         blurb: "18 关 · 6 个世界（DRAM/Flash/FTL/磁盘金字塔与掉电）",
         list: STORAGE_LEVELS,
+        theme: "theme-mem",
       },
       {
         key: "fast" as const,
@@ -89,6 +91,7 @@ export default function ChallengePanel() {
         sub: "《流水线与之后的一切》",
         blurb: "8 关 · 2 个世界（切长路径 / 控制冒险）",
         list: FAST_LEVELS,
+        theme: "theme-fast",
       },
     ];
     return (
@@ -110,7 +113,7 @@ export default function ChallengePanel() {
             return (
               <button
                 key={b.key}
-                className={"book-cover" + (finished ? " done" : "")}
+                className={"book-cover " + b.theme + (finished ? " done" : "")}
                 onClick={() => setBook(b.key)}
               >
                 <span className="cover-glyph">{b.glyph}</span>

@@ -1501,3 +1501,22 @@ input[type="range"]:focus-visible {
 .book-back:hover {
   color: var(--text);
 }
+
+/* 封面配色：CPU=紫 / 存储=青 / 优化=橙 */
+.book-cover.theme-cpu { background: linear-gradient(160deg, #2a1e4a 0%, #181336 100%); border-color: #5e3fb0; }
+.book-cover.theme-cpu:hover { border-color: #8b5cf6; }
+.book-cover.theme-cpu .cover-glyph { color: #c4b5fd; }
+.book-cover.theme-cpu.done { border-color: #4ade80; }
+.book-cover.theme-cpu.done .cover-glyph { color: #4ade80; }
+
+.book-cover.theme-mem { background: linear-gradient(160deg, #0e2f3a 0%, #0a1f28 100%); border-color: #2a8a9a; }
+.book-cover.theme-mem:hover { border-color: #5ed3e6; }
+.book-cover.theme-mem .cover-glyph { color: #67e8f9; }
+.book-cover.theme-mem.done { border-color: #4ade80; }
+.book-cover.theme-mem.done .cover-glyph { color: #4ade80; }
+
+.book-cover.theme-fast { background: linear-gradient(160deg, #3a2210 0%, #251408 100%); border-color: #a26a2a; }
+.book-cover.theme-fast:hover { border-color: #f59e0b; }
+.book-cover.theme-fast .cover-glyph { color: #fbbf24; }
+.book-cover.theme-fast.done { border-color: #4ade80; }
+.book-cover.theme-fast.done .cover-glyph { color: #4ade80; }
