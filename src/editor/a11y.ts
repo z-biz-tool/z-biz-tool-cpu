@@ -2,7 +2,7 @@ import type { Circuit, CompDef, CompInstance, Design } from "../core/types.ts";
 import { defOf } from "../core/custom.ts";
 import { buildNetlist, pinSpecWidth, type SimComp } from "../core/netlist.ts";
 import type { Simulator } from "../core/sim.ts";
-import { buildHitIndex, hitTest } from "./hitIndex.ts";
+import type { HitResult } from "./hitIndex.ts";
 
 /* ------------------------------------------------------------------ *
  * IMP-14: 无障碍替代品 — Canvas 配套的 a11y 模型
@@ -114,7 +114,7 @@ export function portStructure(model: A11yModel): {
 }
 
 /** 命中测试 + a11y 模型：返回焦点元件的引脚状态文本 */
-export function describeFocus(model: A11yModel, hit: ReturnType<typeof hitTest>): string {
+export function describeFocus(model: A11yModel, hit: HitResult | undefined): string {
   if (!hit) return "当前画布没有命中元件";
   if (hit.type === "comp" && hit.comp) {
     const meta = model.comps.find((c) => c.id === hit.comp!.id);
@@ -131,10 +131,4 @@ export function describeFocus(model: A11yModel, hit: ReturnType<typeof hitTest>)
     return `连线 ${w?.from ?? hit.wire.id} → ${w?.to ?? "?"}`;
   }
   return "";
-}
-
-/** 把键盘焦点与画布命中连接：每帧基于 hitIndex 把焦点元件推到 a11y 状态 */
-export function updateFocus(model: A11yModel, idx: ReturnType<typeof buildHitIndex>, c: Circuit, design: Design, world: { x: number; y: number }) {
-  const hit = hitTest(idx, c, design, world);
-  return describeFocus(model, hit);
 }

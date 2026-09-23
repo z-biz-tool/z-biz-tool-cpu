@@ -1239,6 +1239,36 @@ ok:
   check("IMP-14: 邻居切换可达", neighbour(a11y, null, "next") !== null);
   const desc = describeFocus(a11y, hit);
   check("IMP-14: describeFocus 返回描述", typeof desc === "string" && desc.length > 0, desc);
+
+  /* A11Y-KB: 键盘漫游的三条硬要求——从第一个一路 next 恰好走完整张清单（不重不漏）、
+   * 走到两端就停住（不循环，免得读屏用户被困在环里）、说明句报的就是脚下这一行。 */
+  {
+    const n = a11y.comps.length;
+    const stations: string[] = [];
+    let cur: string | null = neighbour(a11y, null, "next");
+    for (let i = 0; i < n; i++) {
+      stations.push(cur as string);
+      cur = neighbour(a11y, cur, "next");
+    }
+    check(
+      `A11Y-KB: 从第一个一路 next 走满 ${n} 个元件，不重不漏`,
+      new Set(stations).size === n && stations[0] === a11y.comps[0].id && stations[n - 1] === a11y.comps[n - 1].id,
+      stations.join(","),
+    );
+    check("A11Y-KB: 走到最后一个还按 next 就停住，不绕回开头", neighbour(a11y, a11y.comps[n - 1].id, "next") === a11y.comps[n - 1].id);
+    check("A11Y-KB: 走到第一个还按 prev 也停住", neighbour(a11y, a11y.comps[0].id, "prev") === a11y.comps[0].id);
+    check("A11Y-KB: 来回各走一半回到原地", neighbour(a11y, neighbour(a11y, a11y.comps[2].id, "next"), "prev") === a11y.comps[2].id);
+    check("A11Y-KB: 认不出的焦点（元件已删）退回第一个，清单不会失去停靠点", neighbour(a11y, "no-such-comp", "prev") === a11y.comps[0].id);
+    check("A11Y-KB: 空画布无邻可走", neighbour(buildA11y({ ...cpu.design.root, comps: [], wires: [] }, cpu.design), null, "next") === null);
+
+    const inst = a11y.comps[2];
+    const spoken = describeFocus(a11y, { type: "comp", comp: cpu.design.root.comps[2], dist: 0 });
+    check(
+      "A11Y-KB: 走到的那一站报出名称、类型与引脚数",
+      spoken.includes(inst.name ?? inst.id) && spoken.includes(`类型 ${inst.type}`) && spoken.includes(`引脚 ${inst.pins.length} 个`),
+      spoken,
+    );
+  }
   const g = screenToGrid(0, 0, { x: 0, y: 0, zoom: 1 });
   check("IMP-14: 屏幕转 grid 一致", g.x === 0 && g.y === 0);
 
@@ -2266,6 +2296,28 @@ ok:
     check("GATE: 表格带行列表头，读屏能对齐单元格", /scope="col"/.test(view) && /scope="row"/.test(view));
     check("GATE: 实时值由用户主动查询并按 polite 播报", /role="status"/.test(view) && /aria-live="polite"/.test(view) && /读取当前引脚值/.test(view));
     check("GATE: 结构表只在拓扑变化时重算", /const sig = useMemo/.test(view) && /useMemo\(\(\) => buildA11y\(circuit, design, sim\), \[sig, design, sim\]/.test(view));
+
+    /* 键盘漫游的接线只能靠源码门禁守住：上面的行为测试证明 neighbour/describeFocus
+     * 本身没错，但界面把它们换成硬编码下标、或者 aria-describedby 指向一个不存在的
+     * id，读屏就是"按了方向键什么也没念"。GATE 只认真实代码，注释里复述的函数名
+     * 会骗过正则（本项目踩过），所以先剥块注释。 */
+    const strip = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, "");
+    const vc = strip(view);
+    const a11yCode = strip(readFileSync(new URL("../src/editor/a11y.ts", import.meta.url).pathname, "utf8"));
+    const helpCode = strip(readFileSync(new URL("../src/editor/panels/WatchPanels.tsx", import.meta.url).pathname, "utf8"));
+    check("GATE: 元件清单的走访走 neighbour，说明走 describeFocus", /neighbour\(model, id, step\[e\.key\]\)/.test(vc) && /describeFocus\(model, \{ type: "comp"/.test(vc));
+    check("GATE: 整张清单只占一个 Tab 停靠点（roving tabindex）", /tabIndex=\{stoppedAt === c\.id \? 0 : -1\}/.test(vc));
+    check(
+      "GATE: 停靠点与 DOM 焦点一起移动，不只等 focus 事件",
+      /const moveTo = [\s\S]{0,140}setFocusId\(id\);[\s\S]{0,90}\?\.focus\(\)/.test(vc) && /moveTo\(neighbour\(model, id/.test(vc),
+    );
+    check("GATE: 焦点说明元素真的挂在 DOM 上，aria-describedby 不指向空气", /id="a11y-focus-hint"/.test(vc) && /aria-describedby=\{stoppedAt === c\.id \? "a11y-focus-hint" : undefined\}/.test(vc));
+    check("GATE: 清单行是真按钮，回车/空格把元件选进画布选区", /className="a11y-row"/.test(vc) && /setSelection\(\{ comps: \[c\.id\], wires: \[\] \}\)/.test(vc) && /aria-pressed=\{selection\.comps\.includes\(c\.id\)\}/.test(vc));
+    check("GATE: 走访用到的键都在（方向键 + Home / End）", /ArrowDown: "next", ArrowRight: "next", ArrowUp: "prev", ArrowLeft: "prev"/.test(vc) && /e\.key === "Home"/.test(vc) && /e\.key === "End"/.test(vc));
+    check("GATE: 焦点元件被删掉时退回第一个，清单不会失去停靠点", /focusId && model\.comps\.some/.test(vc));
+    check("GATE: 行按钮不吃 .a11y-only button 的 margin，焦点环不被裁掉", /\.a11y-only button\.a11y-row\s*\{[^}]*margin: 0/.test(css) && /outline-offset: -2px/.test(css));
+    check("GATE: 无调用方的 updateFocus 已删除，不再留假入口", !/updateFocus/.test(a11yCode) && !/updateFocus/.test(vc));
+    check("GATE: 手册把方向键走访与回车选中写在按键表里", /↑ ↓ ← → \/ Home \/ End/.test(helpCode) && /走访元件/.test(helpCode));
   }
 
   /* GATE: 播报层的接线 —— 逻辑可以单测，但"挂在页面哪、用什么 live 语义"

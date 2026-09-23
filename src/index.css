@@ -375,6 +375,33 @@ input[type="range"]:focus-visible {
 .a11y-only button {
   margin-top: 10px;
 }
+/* 元件清单里的每一行本身是个按钮（回车/空格把它选到画布上），但排版要接着
+   当表格行用：抹掉上面那条 margin-top，靠 inset 描边保证焦点环不被面板的
+   overflow:auto 裁掉，选中态除了 aria-pressed 再多一层底色表达。 */
+.a11y-only button.a11y-row {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 1px 3px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.a11y-only button.a11y-row:focus-visible {
+  outline-offset: -2px;
+}
+.a11y-only button.a11y-row[aria-pressed="true"] {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.a11y-hint {
+  margin: 0 0 6px;
+  color: var(--dim);
+}
 .canvas {
   width: 100%;
   height: 100%;

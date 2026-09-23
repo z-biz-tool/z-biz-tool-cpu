@@ -1,8 +1,8 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { defOf } from "../core/custom.ts";
 import { sortDiags } from "../core/netlist.ts";
 import { bin, hex } from "../core/types.ts";
-import { buildA11y, portStructure } from "./a11y.ts";
+import { buildA11y, describeFocus, neighbour, portStructure } from "./a11y.ts";
 import { useEditor } from "./store.ts";
 
 /* ------------------------------------------------------------------ *
@@ -13,6 +13,10 @@ import { useEditor } from "./store.ts";
  * 当前值按 §10「高速波形不逐变化朗读，用户主动查询当前值」处理：表格里只
  * 放不随仿真时间变化的结构信息（点一下按钮才读一次实时值），否则每拍重排
  * 几百行既拖慢拖动，也让播报追着波形跑。
+ *
+ * 元件清单是一份可漫游的列表：整张表只占一个 Tab 停靠点，↑↓←→ 在元件之间
+ * 走（neighbour），走到的那个元件由 describeFocus 说明类型与引脚数，回车 /
+ * 空格把它选到画布上 —— 选中之后画布、属性面板、播报讲的是同一个元件。
  * ------------------------------------------------------------------ */
 
 const endName = (ref: string, labels: Map<string, string>) => {
@@ -26,7 +30,11 @@ export function CanvasA11y() {
   const circuit = useEditor((s) => s.circuit());
   const sim = useEditor((s) => s.sim);
   const selection = useEditor((s) => s.selection);
+  const setSelection = useEditor((s) => s.setSelection);
   const [readout, setReadout] = useState<string[]>([]);
+  /** 清单里当前停着的元件：整张表只有一个 Tab 停靠点，方向键在它内部走 */
+  const [focusId, setFocusId] = useState<string | null>(null);
+  const rowRefs = useRef(new Map<string, HTMLButtonElement>());
 
   /** 结构指纹：只有元件/引脚/连线端点变了才重排表格，纯拖动不重算 */
   const sig = useMemo(() => {
@@ -41,19 +49,75 @@ export function CanvasA11y() {
   const diags = useMemo(() => sortDiags(sim.errors), [sim]);
   const paramsOf = useMemo(() => new Map(circuit.comps.map((c) => [c.id, c.params])), [circuit]);
 
+  /**
+   * 焦点停在哪一个元件上：没有焦点时是第一个（那一个才是 Tab 停靠点）。
+   * 走掉的那个元件可能已被删除，这时必须退回第一个，否则整张表一个停靠点都没有。
+   */
+  const stoppedAt =
+    focusId && model.comps.some((c) => c.id === focusId) ? focusId : (model.comps[0]?.id ?? null);
+  const focusHint = useMemo(() => {
+    if (!stoppedAt) return "";
+    const inst = circuit.comps.find((c) => c.id === stoppedAt);
+    return inst ? describeFocus(model, { type: "comp", comp: inst, dist: 0 }) : "";
+  }, [stoppedAt, model, circuit]);
+
+  /**
+   * 走过去：先把停靠点记在 state 上，再移 DOM 焦点。
+   * 两件事必须一起做 —— 只靠 focus 事件回填 state 的话，页面失去焦点时
+   * 浏览器只挪 activeElement、根本不派发 focus 事件，停靠点会留在原地，
+   * 读屏念到的说明和脚下这一行就对不上了。
+   */
+  const moveTo = (id: string | null) => {
+    if (!id) return;
+    setFocusId(id);
+    rowRefs.current.get(id)?.focus();
+  };
+
+  const onRowKey = (e: React.KeyboardEvent, id: string) => {
+    const step: Record<string, "next" | "prev"> = { ArrowDown: "next", ArrowRight: "next", ArrowUp: "prev", ArrowLeft: "prev" };
+    if (step[e.key]) {
+      e.preventDefault();
+      moveTo(neighbour(model, id, step[e.key]));
+    } else if (e.key === "Home") {
+      e.preventDefault();
+      moveTo(neighbour(model, null, "next"));
+    } else if (e.key === "End") {
+      e.preventDefault();
+      moveTo(model.comps[model.comps.length - 1]?.id ?? null);
+    }
+  };
+
   const compRows = useMemo(
     () =>
       model.comps.map((c) => {
         const def = defOf(design, c.type, paramsOf.get(c.id) ?? {});
         return (
           <tr key={c.id}>
-            <th scope="row">{labels.get(c.id) ?? c.id}</th>
+            <th scope="row">
+              <button
+                type="button"
+                className="a11y-row"
+                ref={(el) => {
+                  if (el) rowRefs.current.set(c.id, el);
+                  else rowRefs.current.delete(c.id);
+                }}
+                tabIndex={stoppedAt === c.id ? 0 : -1}
+                onFocus={() => setFocusId(c.id)}
+                onClick={() => setSelection({ comps: [c.id], wires: [] })}
+                onKeyDown={(e) => onRowKey(e, c.id)}
+                aria-pressed={selection.comps.includes(c.id)}
+                aria-describedby={stoppedAt === c.id ? "a11y-focus-hint" : undefined}
+              >
+                {labels.get(c.id) ?? c.id}
+              </button>
+            </th>
             <td>{def?.label ?? c.type}</td>
             <td>{pins.get(c.id)}</td>
           </tr>
         );
       }),
-    [model, labels, pins, paramsOf, design],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [model, labels, pins, paramsOf, design, stoppedAt, selection.comps],
   );
 
   const wireRows = useMemo(
@@ -92,6 +156,9 @@ export function CanvasA11y() {
         当前视图共 {model.comps.length} 个元件、{model.wires.length} 根导线、{openPorts.length} 个未连接端口、{diags.length} 条诊断。
       </p>
       <h3>元件与端口</h3>
+      <p id="a11y-focus-hint" className="a11y-hint">
+        {focusHint || "画布上还没有元件。"}
+      </p>
       <table>
         <thead>
           <tr>
