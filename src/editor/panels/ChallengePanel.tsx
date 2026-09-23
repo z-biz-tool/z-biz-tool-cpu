@@ -1,6 +1,7 @@
 import { Button, Modal, Progress, Tag, Tooltip } from "antd";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { LEVELS, STORAGE_LEVELS, FAST_LEVELS, TIERS, levelById, parCost } from "../../challenges/levels.ts";
+import type { Level } from "../../challenges/levels.ts";
 import { catchupLevels, missingPrereqs } from "../../challenges/prereq.ts";
 import { BADGES, passed, scoreOf, tierDone } from "../../challenges/progress.ts";
 /* antd 的 Progress 组件占了这个名字，进度类型换个名再引 */
@@ -25,6 +26,10 @@ interface GapAsk {
   catchup: string[];
 }
 
+function scoreOfBookLevels(progress: ProgressState, list: Level[]): number {
+  return list.filter((l) => passed(progress, l.id)).length;
+}
+
 const levelName = (id: string) => levelById(id)?.name ?? id;
 
 export default function ChallengePanel() {
@@ -37,6 +42,15 @@ export default function ChallengePanel() {
   const level = levelById(levelId ?? "");
   const score = scoreOf(progress);
   const [gapAsk, setGapAsk] = useState<GapAsk | null>(null);
+  /** 当前翻开的书：null = 全开；否则只显该书的世界 */
+  const [book, setBook] = useState<"all" | "logic" | "memory" | "fast">("all");
+  /** doc 02 §5.3：顶栏「书架」按钮触发回到全览 */
+  useEffect(() => {
+    (window as { __resetBookTo?: () => void }).__resetBookTo = () => setBook("all");
+    return () => {
+      delete (window as { __resetBookTo?: () => void }).__resetBookTo;
+    };
+  }, []);
   /** doc 02 §5.2：振荡与预算用尽必须说不同的话 */
   const settle = result ? settleState(result.settleOutcome) : null;
 
@@ -51,6 +65,41 @@ export default function ChallengePanel() {
 
   return (
     <div className="panel-body">
+      <div className="book-saver" role="tablist" aria-label="选择书">
+        <button
+          className={"book-tab" + (book === "all" ? " on" : "")}
+          onClick={() => setBook("all")}
+        >
+          全部
+          <span className="mono">
+            {LEVELS.length + STORAGE_LEVELS.length + FAST_LEVELS.length}
+          </span>
+        </button>
+        <button
+          className={"book-tab" + (book === "logic" ? " on" : "")}
+          onClick={() => setBook("logic")}
+          aria-pressed={book === "logic"}
+        >
+          CPU 书
+          <span className="mono">{scoreOfBookLevels(progress, LEVELS)}/{LEVELS.length}</span>
+        </button>
+        <button
+          className={"book-tab" + (book === "memory" ? " on" : "")}
+          onClick={() => setBook("memory")}
+          aria-pressed={book === "memory"}
+        >
+          存储书
+          <span className="mono">{scoreOfBookLevels(progress, STORAGE_LEVELS)}/{STORAGE_LEVELS.length}</span>
+        </button>
+        <button
+          className={"book-tab" + (book === "fast" ? " on" : "")}
+          onClick={() => setBook("fast")}
+          aria-pressed={book === "fast"}
+        >
+          优化书
+          <span className="mono">{scoreOfBookLevels(progress, FAST_LEVELS)}/{FAST_LEVELS.length}</span>
+        </button>
+      </div>
       <div className="head">
         <span className="title">关卡</span>
         <span className="tag">
@@ -60,7 +109,8 @@ export default function ChallengePanel() {
       </div>
 
       <div className="level-list">
-        {TIERS.map((t) => {
+        {(book === "all" || book === "logic") &&
+          TIERS.map((t) => {
           const list = LEVELS.filter((l) => l.tier === t.tier);
           const { ok, total } = tierDone(progress, t.tier);
           return (
@@ -101,8 +151,12 @@ export default function ChallengePanel() {
         })}
       </div>
 
-      <StorageSection progress={progress} levelId={levelId} onOpen={openLevel} />
-      <FastSection progress={progress} levelId={levelId} onOpen={openLevel} />
+      {(book === "all" || book === "memory") && (
+        <StorageSection progress={progress} levelId={levelId} onOpen={openLevel} />
+      )}
+      {(book === "all" || book === "fast") && (
+        <FastSection progress={progress} levelId={levelId} onOpen={openLevel} />
+      )}
 
       <button className="btn wide" onClick={() => st().openSandbox()}>
         进入自由搭建沙盒
