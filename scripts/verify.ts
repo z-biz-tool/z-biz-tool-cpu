@@ -3,6 +3,7 @@
  * 覆盖组合逻辑、位宽推断、总线拆分/合并、时序元件、子电路、错误诊断。
  */
 import { CircuitBuilder } from "../src/core/build.ts";
+import { sortDiags } from "../src/core/netlist.ts";
 import { RUN_STATE_TEXT, Simulator, settleState, worstSettle } from "../src/core/sim.ts";
 import { totalCost } from "../src/core/custom.ts";
 import { LEVELS, levelDesign, solutionDesign } from "../src/challenges/levels.ts";
@@ -234,6 +235,106 @@ function out(sim: Simulator, comp: string, pin = "in") {
   ]);
   const sim = mkSim(b.build());
   check("检出多驱动冲突", sim.errors.some((e) => e.level === "error" && e.msg.includes("多个输出")));
+}
+
+/* 7b. 诊断：未驱动输入 — doc 02 §5.2「未连接输入兼容为 0，同时显示未驱动警告；
+ *     是否阻断由关卡契约声明，不让灯亮掩盖缺线」
+ *     三件事分别可验：① 值仍然是 0 ② 诊断确实说出来 ③ 只 warn，不阻断
+ */
+{
+  const floatOf = (sim: Simulator) => sim.errors.filter((e) => e.level === "warn" && /未驱动/.test(e.msg));
+
+  const b = new CircuitBuilder();
+  const src = b.add("input", 0, 0, { bitWidth: 1, name: "A" });
+  const g = b.add("and", 5, 1);
+  const o = b.add("output", 10, 2, { bitWidth: 1, name: "Q" });
+  b.link([
+    [src, "out", g, "i0"],
+    [g, "out", o, "in"],
+  ]);
+  const half = mkSim(b.build());
+  check("FLOAT: 缺一条线就进诊断", floatOf(half).length === 1 && floatOf(half)[0].msg.includes("i1"), floatOf(half).map((e) => e.msg).join(" | "));
+  const gap = half.valueOf({ comp: g, pin: "i1" });
+  check("FLOAT: 悬空输入仍按 0 读取，但 driven=false", !!gap && gap.value === 0 && gap.driven === false, JSON.stringify(gap));
+  check("FLOAT: 未驱动只是 warn，不阻断仿真", !half.hasBlockingError && half.step() === true, `blocking=${half.hasBlockingError}`);
+  check("FLOAT: 诊断里点名元件，能按图找线", floatOf(half).some((e) => e.comps.includes(g)), JSON.stringify(floatOf(half).map((e) => e.comps)));
+
+  const okb = new CircuitBuilder();
+  const a1 = okb.add("input", 0, 0, { bitWidth: 1 });
+  const a2 = okb.add("input", 0, 3, { bitWidth: 1 });
+  const g2 = okb.add("and", 5, 1);
+  const o2 = okb.add("output", 10, 2, { bitWidth: 1 });
+  okb.link([
+    [a1, "out", g2, "i0"],
+    [a2, "out", g2, "i1"],
+    [g2, "out", o2, "in"],
+  ]);
+  const wired = mkSim(okb.build());
+  check("FLOAT: 接线补齐后告警消失（不是常驻噪音）", floatOf(wired).length === 0 && wired.errors.length === 0, JSON.stringify(wired.errors));
+
+  // 一堆悬空必须合并成一条并给出总数：面板只显示前若干条，逐脚刷屏会埋掉别的诊断
+  const many = new CircuitBuilder();
+  for (let i = 0; i < 4; i++) many.add("and", 5 + i, 1 + i * 2);
+  const manySim = mkSim(many.build());
+  const manyDiag = floatOf(manySim);
+  check("FLOAT: 8 处悬空合并成一条并报总数", manyDiag.length === 1 && /共 8 处/.test(manyDiag[0].msg), manyDiag.map((e) => e.msg).join(" | "));
+
+  // 时钟悬空另有后果：时序元件根本不动作，输出停在初值，所以不能混进"按 0 读取"
+  const cb = new CircuitBuilder();
+  const d = cb.add("input", 0, 2, { bitWidth: 1 }, { name: "D" });
+  const ff = cb.add("dff", 5, 1, {}, { name: "F1" });
+  const q = cb.add("output", 11, 1, { bitWidth: 1 }, { name: "Q" });
+  cb.link([
+    [d, "out", ff, "d"],
+    [ff, "q", q, "in"],
+  ]);
+  const noClk = mkSim(cb.build());
+  const clkDiag = noClk.errors.filter((e) => e.level === "warn" && /没有时钟/.test(e.msg));
+  check("FLOAT: 时钟悬空按画布名字单列一条", clkDiag.length === 1 && /F1/.test(clkDiag[0].msg), clkDiag.map((e) => e.msg).join(" | "));
+  check("FLOAT: 时钟告警不与数据悬空混写", floatOf(noClk).length === 0, floatOf(noClk).map((e) => e.msg).join(" | "));
+  const withClk = new CircuitBuilder();
+  const ck = withClk.add("clock", 0, 0, { name: "CLK" });
+  const di = withClk.add("input", 0, 2, { bitWidth: 1 });
+  const ff2 = withClk.add("dff", 5, 1);
+  withClk.link([
+    [ck, "out", ff2, "clk"],
+    [di, "out", ff2, "d"],
+  ]);
+  check("FLOAT: 接上时钟后不再报没有时钟", mkSim(withClk.build()).errors.filter((e) => /没有时钟/.test(e.msg)).length === 0);
+
+  // 判题层：参考解答本身就有悬空（进位链最低位 cin 常留空读 0），必须"照样通过 + 仍然报出"
+  let judgedPass = 0,
+    judgedWithFloat = 0;
+  for (const l of LEVELS) {
+    const sol = solutionDesign(l);
+    if (!sol) continue;
+    const r = runLevelTests(l, sol);
+    if (!r.pass) continue;
+    judgedPass++;
+    if (r.errors.some((e) => e.level === "warn" && /未驱动|没有时钟/.test(e.msg))) judgedWithFloat++;
+  }
+  check(
+    "FLOAT: 未驱动告警不改变判题结论（warn≠阻断）",
+    judgedWithFloat > 0 && judgedWithFloat < judgedPass,
+    `${judgedPass} 份解答判题通过，其中 ${judgedWithFloat} 份带未驱动告警仍判通过`,
+  );
+
+  // 排序：未驱动是新增的批量 warn，绝不能把阻断性错误挤出面板可见区
+  {
+    const b2 = new CircuitBuilder();
+    for (let i = 0; i < 3; i++) b2.add("and", 5 + i, 1 + i * 2);
+    const x = b2.add("input", 0, 0, { bitWidth: 1 });
+    const y = b2.add("input", 0, 4, { bitWidth: 1 });
+    const sink = b2.add("output", 8, 9, { bitWidth: 1 });
+    b2.link([
+      [x, "out", sink, "in"],
+      [y, "out", sink, "in"],
+    ]);
+    const mixed = mkSim(b2.build());
+    const sorted = sortDiags(mixed.errors);
+    check("FLOAT: 排序后 error 永远排在批量 warn 之前", sorted[0].level === "error" && sorted.filter((e) => e.level === "warn").length >= 1, JSON.stringify(sorted.map((e) => e.level)));
+    check("FLOAT: 面板截断前 12 条也不会藏掉阻断性错误", sortDiags(mixed.errors).slice(0, 12).some((e) => e.level === "error"));
+  }
 }
 
 /* 8. 交叉耦合 NOR 锁存器：验证反馈定点迭代与保持 */
@@ -1775,6 +1876,20 @@ ok:
     };
     walk(new URL("../src", import.meta.url).pathname);
     check("GATE: 没有 antd v6 废弃属性", bad.length === 0, bad.join(" | "));
+  }
+
+  /* GATE: 诊断必须按 level 上色。判题面板当初把所有诊断都写成 note error，
+   * 现在多了未驱动这类 warn，混成红色等于告诉学生"这题做错了"。 */
+  {
+    const { readFileSync } = await import("node:fs");
+    const panel = readFileSync(new URL("../src/editor/panels/ChallengePanel.tsx", import.meta.url).pathname, "utf8");
+    const inspector = readFileSync(new URL("../src/editor/Inspector.tsx", import.meta.url).pathname, "utf8");
+    const css = readFileSync(new URL("../src/index.css", import.meta.url).pathname, "utf8");
+    check("GATE: 判题诊断按 level 取样式", /className=\{"note " \+ e\.level\}/.test(panel) && !/className="note error" key=\{i\}/.test(panel));
+    check("GATE: 运行状态提示按 tone 取样式", /className=\{"note " \+ settle\.tone\}/.test(panel));
+    check("GATE: warn 有独立于 error 的样式", /\.note\.warn\s*\{/.test(css) && /\.pin-row \.undriven\s*\{/.test(css));
+    check("GATE: 引脚行按 driven 标未驱动，而不是只看值", /!v\.driven/.test(inspector) && /className="undriven"/.test(inspector));
+    check("GATE: 两个诊断面板共用一套排序", /sortDiags\(result\.errors\)/.test(panel) && /sortDiags\(errors\)/.test(inspector));
   }
 
   // AT-01..AT-12 全验收矩阵

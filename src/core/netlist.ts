@@ -36,6 +36,14 @@ export interface SimError {
   comps: string[];
 }
 
+/**
+ * 诊断排序：面板一屏只放得下前几条，未驱动这类 warn 不能把阻断性错误挤掉。
+ * 只有一处定义，Inspector 与判题结果共用，免得两个面板给出两套优先级。
+ */
+export function sortDiags<T extends { level: "error" | "warn" }>(list: T[]): T[] {
+  return [...list].sort((a, b) => (a.level === b.level ? 0 : a.level === "error" ? -1 : 1));
+}
+
 export interface Slot {
   comp: number;
   pin: number;
@@ -318,6 +326,39 @@ export function buildNetlist(design: Design, circuit: Circuit): Netlist {
       level: "warn",
       msg: "定宽引脚接在更宽的总线上，将按低位截断：" + mismatch.join("，"),
       comps: [],
+    });
+  }
+
+  /* doc 02 §5.2：未连接的输入仍然按 0 读取（仿真语义不变），但要把「没有驱动」讲出来，
+   * 否则学生看到一串合法的 0 会以为电路在正常工作。是否阻断交给关卡契约判断，
+   * 诊断本身一律 warn。时钟悬空单列一条：时序元件不动作时输出停在初值，比读 0 更难查。
+   */
+  const float = { names: [] as string[], comps: [] as string[] };
+  const floatClk = { names: [] as string[], comps: [] as string[] };
+  for (const net of nets) {
+    if (net.drivers.length || !net.sinks.length) continue;
+    for (const s of net.sinks) {
+      const c = comps[slots[s].comp];
+      const spec = c.def.pins[slots[s].pin];
+      const bag = spec.clock ? floatClk : float;
+      bag.names.push(`${c.inst.name || c.id}.${spec.label || spec.id}`);
+      if (!bag.comps.includes(c.id)) bag.comps.push(c.id);
+    }
+  }
+  const listFloating = (bag: { names: string[]; comps: string[] }) =>
+    bag.names.slice(0, 4).join("、") + (bag.names.length > 4 ? ` …共 ${bag.names.length} 处` : "");
+  if (float.names.length) {
+    errors.push({
+      level: "warn",
+      msg: `输入未连接，按 0 读取（未驱动）：${listFloating(float)}。需要固定电平就放一个「常量」`,
+      comps: float.comps,
+    });
+  }
+  if (floatClk.names.length) {
+    errors.push({
+      level: "warn",
+      msg: `时序元件没有时钟，不会动作：${listFloating(floatClk)}`,
+      comps: floatClk.comps,
     });
   }
 

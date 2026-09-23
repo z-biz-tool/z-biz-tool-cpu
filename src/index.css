@@ -600,6 +600,15 @@ body {
   width: 26px;
   text-align: right;
 }
+/* doc 02 §5.2：悬空输入读出来也是 0，要在引脚行上单独标出来（与 .diag li.warn 同色） */
+.pin-row .undriven {
+  color: #fbbf24;
+  border: 1px solid rgba(251, 191, 36, 0.45);
+  border-radius: 4px;
+  padding: 0 4px;
+  font-size: 10px;
+  white-space: nowrap;
+}
 .dir.in {
   color: #38bdf8;
 }
@@ -726,6 +735,9 @@ body {
 }
 .note.error {
   color: #fca5a5;
+}
+.note.warn {
+  color: #fbbf24;
 }
 .checks {
   margin: 6px 0 0;

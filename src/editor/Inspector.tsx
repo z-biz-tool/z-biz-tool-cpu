@@ -1,6 +1,7 @@
 import { Select, Switch } from "antd";
 import { useMemo, useState } from "react";
 import { customDefOf, defOf } from "../core/custom.ts";
+import { sortDiags } from "../core/netlist.ts";
 import { bin, hex, type CompInstance, type ParamSpec } from "../core/types.ts";
 import { defCost, designCost, useEditor } from "./store.ts";
 
@@ -59,10 +60,18 @@ export default function Inspector() {
         <h4>引脚实时值</h4>
         {def.pins.map((p) => {
           const v = sim.valueOf({ comp: comp.id, pin: p.id });
+          // doc 02 §5.2：悬空输入读出来也是 0，看起来和"真的接地"一模一样，
+          // 所以必须在引脚行上标出未驱动，不能只靠值本身让人猜。
+          const floating = p.kind === "in" && v !== undefined && !v.driven;
           return (
             <div className="pin-row" key={p.id}>
               <span className={"dir " + p.kind}>{p.kind === "in" ? "→" : "←"}</span>
               <span className="pin-name">{p.label || p.id}</span>
+              {floating && (
+                <span className="undriven" title="没有输出或导线接到这个引脚，仿真按 0 读取">
+                  未驱动
+                </span>
+              )}
               <span className="mono">{v ? (v.width > 4 ? hex(v.value, v.width) : bin(v.value, v.width)) : "—"}</span>
               <span className="bits mono">{v?.width ?? 0}b</span>
             </div>
@@ -142,6 +151,7 @@ function EmptyInfo() {
   const design = useEditor((s) => s.design);
   const view = useEditor((s) => s.view);
   const errors = useEditor((s) => s.sim.errors);
+  const diags = useMemo(() => sortDiags(errors), [errors]);
   const stats = useMemo(() => {
     const byCat = new Map<string, number>();
     const walk = (comps: CompInstance[]) => {
@@ -172,11 +182,11 @@ function EmptyInfo() {
           </span>
         ))}
       </div>
-      {!!errors.length && (
+      {!!diags.length && (
         <>
           <h4>拓扑诊断</h4>
           <ul className="diag">
-            {errors.slice(0, 12).map((e, i) => (
+            {diags.slice(0, 12).map((e, i) => (
               <li key={i} className={e.level}>
                 {e.msg}
               </li>

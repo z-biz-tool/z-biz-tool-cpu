@@ -4,6 +4,7 @@ import { LEVELS, TIERS, levelById } from "../../challenges/levels.ts";
 import { BADGES, isUnlocked, passed, scoreOf, tierDone } from "../../challenges/progress.ts";
 import type { Badge } from "../../challenges/progress.ts";
 import { settleState } from "../../core/sim.ts";
+import { sortDiags } from "../../core/netlist.ts";
 import { designCost, useEditor } from "../store.ts";
 
 /* ------------------------------------------------------------------ *
@@ -117,7 +118,7 @@ export default function ChallengePanel() {
                 </span>
               </div>
               {settle && (
-                <p className="note error">
+                <p className={"note " + settle.tone}>
                   {settle.label}：{settle.detail}
                 </p>
               )}
@@ -138,11 +139,15 @@ export default function ChallengePanel() {
                   </li>
                 ))}
               </ul>
-              {result.errors.slice(0, 5).map((e, i) => (
-                <p className="note error" key={i}>
-                  {e.msg}
-                </p>
-              ))}
+              {/* 未驱动只是"按 0 读取"的事实，不能和阻断性错误共用红色样式，
+                  也不能把它排到前面挤掉真正的错误 */}
+              {sortDiags(result.errors)
+                .slice(0, 5)
+                .map((e, i) => (
+                  <p className={"note " + e.level} key={i}>
+                    {e.msg}
+                  </p>
+                ))}
             </div>
           )}
         </>
