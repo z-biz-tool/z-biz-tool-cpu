@@ -1094,3 +1094,47 @@ input[type="range"]:focus-visible {
   font-family: var(--mono);
   font-size: 11px;
 }
+
+/* ------------------------ 无障碍媒体查询（doc 02 §10） ------------------------ */
+
+/* 减少动效：把所有过渡/动画压成"瞬时"。antd 的下拉、弹窗、标签页动效
+   同样是 CSS transition，这里一并覆盖。
+   画布的 rAF 心跳、时钟波形、仿真推进属于"内容"而不是装饰，一律不停 ——
+   WCAG 2.3.3 Animation from Interactions 只约束非必要动效。 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    transition-delay: 0ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    animation-delay: 0ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* 增强对比度：只抬"线条"与"次要文字"两组颜色，背景与正文不动（本来就在
+   AAA 区间）。默认主题里 1 px 分隔线与面板底只有 1.26~1.41，开高对比度的
+   用户最需要看见的恰恰是它。四个值对最亮控件底 #1d2433 的实测：
+   --edge 3.28、--edge-strong 6.16、--danger-edge 4.13、--dim 8.61。 */
+@media (prefers-contrast: more) {
+  :root {
+    --edge: #6a7482;
+    --edge-strong: #98a4b8;
+    --dim: #b9c1d4;
+    --danger-edge: #c06a79;
+  }
+}
+
+/* 强制配色（Windows 高对比度模式）：系统会把颜色整体换成方案色，而元件的
+   导线电平、位宽、未驱动告警全靠颜色区分，画布必须自保；其余控件保留系统
+   笔色，只把焦点环加粗到 3 px 并用 Highlight，保证仍然看得见。 */
+@media (forced-colors: active) {
+  canvas {
+    forced-color-adjust: none;
+  }
+  :focus-visible {
+    outline: 3px solid Highlight;
+  }
+}

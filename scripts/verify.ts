@@ -2153,29 +2153,6 @@ ok:
       return { min, at };
     }
 
-    /* 1) 文字色：正文最小 11 px，全部按 AA 的 4.5 门槛 */
-    let textN = 0;
-    let textMin = Infinity;
-    const textFails: string[] = [];
-    for (const r of rules) {
-      const rawC = /(?:^|[;\s])color\s*:\s*([^;]+)/.exec(r.body)?.[1]?.trim() ?? "";
-      if (!rawC) continue;
-      const sel = r.sels[0];
-      const fg = hexOf(rawC);
-      if (!fg) {
-        textFails.push(`${sel} 的文字色「${rawC}」解析不出实色`);
-        continue;
-      }
-      // 半透明底先合成，再拿合成结果当相邻面（见下面第 3 项的双端校验）
-      const rawB = rawColor(/(?:^|[;\s])background(?:-color)?\s*:\s*([^;]+)/.exec(r.body)?.[1]?.trim() ?? "");
-      if (/^rgba/.test(rawB)) continue;
-      const w = worst(fg, adjacents(sel));
-      textN++;
-      textMin = Math.min(textMin, w.min);
-      if (w.min < 4.5) textFails.push(`${sel} ${fg} on ${w.at} = ${w.min.toFixed(2)}`);
-    }
-    check(`CT: ${textN} 处文字与相邻底色实测 ≥4.5:1（最低 ${textMin.toFixed(2)}）`, textFails.length === 0, textFails.slice(0, 8).join(" | "));
-
     /* 2) 控件边界：非文字对比度门槛 3:1（WCAG 1.4.11） */
     const BORDERS: { sel: string; prop: string; on?: string }[] = [
       { sel: ".btn", prop: "border" },
@@ -2192,43 +2169,88 @@ ok:
       { sel: ".pal-item.on", prop: "border-color" },
       { sel: "::-webkit-scrollbar-thumb", prop: "background", on: "track" },
     ];
-    const borderFails: string[] = [];
-    let borderMin = Infinity;
-    for (const e of BORDERS) {
-      const fg = colorIn(declOf(e.sel, e.prop));
-      if (!fg) {
-        borderFails.push(`${e.sel} 的 ${e.prop} 解析不出实色`);
-        continue;
-      }
-      const w = worst(fg, e.on === "track" ? DARK : adjacents(e.sel));
-      borderMin = Math.min(borderMin, w.min);
-      if (w.min < 3) borderFails.push(`${e.sel} ${fg} on ${w.at} = ${w.min.toFixed(2)}`);
-    }
-    check(`CT: ${BORDERS.length} 类控件边界与相邻底色实测 ≥3:1（最低 ${borderMin.toFixed(2)}）`, borderFails.length === 0, borderFails.join(" | "));
 
-    /* 3) 「半透明底 + 实色文字」的规则：合成到它可能压住的最深/最浅中性面，两端都要过线 */
-    let blendN = 0;
-    let blendMin = Infinity;
-    const blendFails: string[] = [];
-    for (const r of rules) {
-      const rawC = /(?:^|[;\s])color\s*:\s*([^;]+)/.exec(r.body)?.[1]?.trim() ?? "";
-      const rawB = /(?:^|[;\s])background(?:-color)?\s*:\s*([^;]+)/.exec(r.body)?.[1]?.trim() ?? "";
-      const fg = hexOf(rawC);
-      const rgba = /^rgba\(([^)]*)\)$/.exec(rawColor(rawB));
-      if (!fg || !rgba) continue;
-      const p = rgba[1].split(",").map((x) => Number(x.trim()));
-      for (const under of ["#0b0d14", "#1a2030"]) {
-        const b = chan(under);
-        const mix =
-          "#" +
-          [0, 1, 2].map((i) => Math.round(p[3] * p[i] + (1 - p[3]) * b[i])).map((v) => v.toString(16).padStart(2, "0")).join("");
-        const v = ratio(fg, mix);
-        blendN++;
-        blendMin = Math.min(blendMin, v);
-        if (v < 4.5) blendFails.push(`${r.sels[0]} ${fg} on ${mix} = ${v.toFixed(2)}`);
+    /** 一轮完整测量：文字 4.5 / 控件边界 3 / 半透明合成 4.5。
+     *  抽成函数是为了能在「高对比度覆盖」下原样再跑一遍。 */
+    function sweep() {
+      /* 1) 文字色：正文最小 11 px，全部按 AA 的 4.5 门槛 */
+      let textN = 0;
+      let textMin = Infinity;
+      const textFails: string[] = [];
+      for (const r of rules) {
+        const rawC = /(?:^|[;\s])color\s*:\s*([^;]+)/.exec(r.body)?.[1]?.trim() ?? "";
+        if (!rawC) continue;
+        const sel = r.sels[0];
+        const fg = hexOf(rawC);
+        if (!fg) {
+          textFails.push(`${sel} 的文字色「${rawC}」解析不出实色`);
+          continue;
+        }
+        // 半透明底交给下面第 3 项做双端合成校验，这里跳过以免重复计一次
+        const rawB = rawColor(/(?:^|[;\s])background(?:-color)?\s*:\s*([^;]+)/.exec(r.body)?.[1]?.trim() ?? "");
+        if (/^rgba/.test(rawB)) continue;
+        const w = worst(fg, adjacents(sel));
+        textN++;
+        textMin = Math.min(textMin, w.min);
+        if (w.min < 4.5) textFails.push(`${sel} ${fg} on ${w.at} = ${w.min.toFixed(2)}`);
+      }
+
+      const borderFails: string[] = [];
+      let borderMin = Infinity;
+      for (const e of BORDERS) {
+        const fg = colorIn(declOf(e.sel, e.prop));
+        if (!fg) {
+          borderFails.push(`${e.sel} 的 ${e.prop} 解析不出实色`);
+          continue;
+        }
+        const w = worst(fg, e.on === "track" ? DARK : adjacents(e.sel));
+        borderMin = Math.min(borderMin, w.min);
+        if (w.min < 3) borderFails.push(`${e.sel} ${fg} on ${w.at} = ${w.min.toFixed(2)}`);
+      }
+
+      /* 3) 「半透明底 + 实色文字」：合成到它可能压住的最深/最浅中性面，两端都要过线 */
+      let blendN = 0;
+      let blendMin = Infinity;
+      const blendFails: string[] = [];
+      for (const r of rules) {
+        const rawC = /(?:^|[;\s])color\s*:\s*([^;]+)/.exec(r.body)?.[1]?.trim() ?? "";
+        const rawB = /(?:^|[;\s])background(?:-color)?\s*:\s*([^;]+)/.exec(r.body)?.[1]?.trim() ?? "";
+        const fg = hexOf(rawC);
+        const rgba = /^rgba\(([^)]*)\)$/.exec(rawColor(rawB));
+        if (!fg || !rgba) continue;
+        const p = rgba[1].split(",").map((x) => Number(x.trim()));
+        for (const under of ["#0b0d14", "#1a2030"]) {
+          const b = chan(under);
+          const mix =
+            "#" +
+            [0, 1, 2].map((i) => Math.round(p[3] * p[i] + (1 - p[3]) * b[i])).map((v) => v.toString(16).padStart(2, "0")).join("");
+          const v = ratio(fg, mix);
+          blendN++;
+          blendMin = Math.min(blendMin, v);
+          if (v < 4.5) blendFails.push(`${r.sels[0]} ${fg} on ${mix} = ${v.toFixed(2)}`);
+        }
+      }
+      return { textN, textMin, textFails, borderMin, borderFails, blendN, blendMin, blendFails };
+    }
+
+    /** 临时替换主题变量后再跑一轮（高对比度媒体查询就是改这几个 token） */
+    function sweepWith(patch: Record<string, string>) {
+      const saved = Object.keys(patch).map((k) => [k, vars.get(k)] as const);
+      for (const k of Object.keys(patch)) vars.set(k, patch[k]);
+      try {
+        return sweep();
+      } finally {
+        for (const [k, v] of saved) {
+          if (v === undefined) vars.delete(k);
+          else vars.set(k, v);
+        }
       }
     }
-    check(`CT: ${blendN} 组半透明底合成后文字仍 ≥4.5:1（最低 ${blendMin.toFixed(2)}）`, blendFails.length === 0, blendFails.join(" | "));
+
+    const base = sweep();
+    check(`CT: ${base.textN} 处文字与相邻底色实测 ≥4.5:1（最低 ${base.textMin.toFixed(2)}）`, base.textFails.length === 0, base.textFails.slice(0, 8).join(" | "));
+    check(`CT: ${BORDERS.length} 类控件边界与相邻底色实测 ≥3:1（最低 ${base.borderMin.toFixed(2)}）`, base.borderFails.length === 0, base.borderFails.join(" | "));
+    check(`CT: ${base.blendN} 组半透明底合成后文字仍 ≥4.5:1（最低 ${base.blendMin.toFixed(2)}）`, base.blendFails.length === 0, base.blendFails.join(" | "));
 
     /* 4) 焦点环：必须是可见的实线 outline，且与所有中性面 ≥3:1（WCAG 2.4.11 / 1.4.11） */
     const focusBody = rules.find((r) => r.sels.includes(":focus-visible"))?.body ?? "";
@@ -2243,6 +2265,54 @@ ok:
     );
     check("CT: 没有任何控件用 outline: none 关掉焦点", !/outline\s*:\s*none/.test(plain));
     check("CT: --edge 只作装饰分隔，控件描边统一走 --edge-strong", (plain.match(/var\(--edge-strong\)/g) ?? []).length >= 7 && !/\.btn\s*\{[^}]*border:\s*1px solid var\(--edge\)/.test(plain));
+
+    /* ---- CT2: 三个无障碍媒体查询 ---- */
+
+    /** 取出某个 @media 块的原文（大括号配平，本文件的媒体查询只嵌套一层规则） */
+    function mediaBlock(feature: string): string {
+      const at = plain.indexOf(`@media (${feature}`);
+      if (at < 0) return "";
+      let depth = 0;
+      for (let j = plain.indexOf("{", at); j < plain.length; j++) {
+        if (plain[j] === "{") depth++;
+        else if (plain[j] === "}" && --depth === 0) return plain.slice(at, j + 1);
+      }
+      return "";
+    }
+
+    /* 减少动效：必须用 * 通配 + !important 压住包括 antd 在内的所有过渡/动画。
+     * 只压时长，不停仿真 —— Canvas 的 rAF 心跳与时钟波形是内容不是装饰。 */
+    const rm = mediaBlock("prefers-reduced-motion");
+    const mDuration = (prop: string) => {
+      const v = new RegExp(`(?:^|[;\\s])${prop}\\s*:\\s*([\\d.]+m?s)[^;]*`).exec(rm)?.[1] ?? "";
+      return /s$/.test(v) && !/ms$/.test(v) ? parseFloat(v) * 1000 : parseFloat(v);
+    };
+    const hasImportant = (prop: string) => new RegExp(`${prop}\\s*:[^;]*!important`).test(rm);
+    check(
+      `CT2: 减少动效压到 transition ${mDuration("transition-duration")}ms / animation ${mDuration("animation-duration")}ms，且带 !important`,
+      /\*\s*,/.test(rm) && mDuration("transition-duration") <= 1 && mDuration("animation-duration") <= 1 && hasImportant("transition-duration") && hasImportant("animation-duration"),
+      rm.slice(0, 80)
+    );
+    check("CT2: 减少动效用 * 通配，新加的动画自动被覆盖", /\*\s*,\s*\*::before\s*,\s*\*::after/.test(rm));
+    check("CT2: 减少动效只压时长，不隐藏内容（display/visibility/opacity 一律不出现）", !/display|visibility|opacity/.test(rm), rm.slice(0, 60));
+
+    /* 增强对比度：把 :root 覆盖读回来，用同一套公式重测，并要求最低项被抬高 */
+    const hcBlock = mediaBlock("prefers-contrast");
+    const hc: Record<string, string> = {};
+    for (const m of hcBlock.matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)) hc[m[1]] = m[2].trim();
+    const hcRun = Object.keys(hc).length ? sweepWith(hc) : null;
+    check(`CT2: 高对比度覆盖 ${Object.keys(hc).join(",")} 后全部实测仍达标`, !!hcRun && hcRun.textFails.length === 0 && hcRun.borderFails.length === 0 && hcRun.blendFails.length === 0, (hcRun?.textFails ?? []).concat(hcRun?.borderFails ?? []).slice(0, 6).join(" | "));
+    check(
+      `CT2: 高对比度确实抬高了最低项（文字 ${base.textMin.toFixed(2)}→${hcRun?.textMin.toFixed(2)}，边界 ${base.borderMin.toFixed(2)}→${hcRun?.borderMin.toFixed(2)}）`,
+      !!hcRun && hcRun.textMin > base.textMin && hcRun.borderMin > base.borderMin,
+      `--dim=${hc["--dim"] ?? ""} --edge=${hc["--edge"] ?? ""}`
+    );
+
+    /* 强制配色：画布必须保留自己的配色（电平/位宽全靠颜色区分），
+     * 其余控件交回系统笔色，只把焦点环加粗。 */
+    const fc = mediaBlock("forced-colors");
+    check("CT2: 强制配色下画布关掉 forced-color-adjust", /canvas\s*\{[^}]*forced-color-adjust:\s*none/.test(fc), fc.slice(0, 80));
+    check("CT2: 强制配色下焦点环改用系统高亮色且加粗", /outline:\s*3px solid Highlight/.test(fc));
   }
 
   // AT-01..AT-12 全验收矩阵
