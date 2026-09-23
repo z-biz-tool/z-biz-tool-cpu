@@ -1,0 +1,46 @@
+name: Build & Package
+
+# 打 tag（v*）才出包：cpu 是纯 Web 应用（无桌面壳），产物为 vite build 静态包。
+# 平台无关，单条 ubuntu 腿即可；tsc --noEmit 内含在 npm run build 里。
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: 静态包（dist → zip）
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm install --registry=https://registry.npmmirror.com
+
+      - name: Build
+        run: npm run build
+
+      - name: Zip dist
+        run: |
+          test -f dist/index.html || { echo "dist/index.html 不存在，构建产物不完整"; exit 1; }
+          cd dist
+          zip -qr "../z-biz-tool-cpu-${GITHUB_REF_NAME}.zip" .
+          cd ..
+          mkdir -p out && mv "z-biz-tool-cpu-${GITHUB_REF_NAME}.zip" out/
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-dist-${{ github.ref_name }}
+          path: out/*
+          if-no-files-found: error
