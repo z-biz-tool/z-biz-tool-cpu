@@ -64,7 +64,7 @@ export default function ChallengePanel() {
   };
 
   if (book === null) {
-    /* 首页书架：三张大封面卡 */
+    /* 主页：3 张书卡，别的一概不放 */
     const books = [
       {
         key: "logic" as const,
@@ -95,15 +95,7 @@ export default function ChallengePanel() {
       },
     ];
     return (
-      <div className="panel-body shelf-body">
-        <div className="head">
-          <span className="title">书架</span>
-          <span className="tag">
-            {score.levels}/{LEVELS.length + STORAGE_LEVELS.length + FAST_LEVELS.length} 关
-          </span>
-          <span className="tag">成就 {score.badges}/{BADGES.length}</span>
-        </div>
-        <p className="panel-note">选一本书开始学习。每本书的元件会随关卡通关而逐步解锁。</p>
+      <div className="shelf-body">
         <div className="shelf">
           {books.map((b) => {
             const done = scoreOfBookLevels(progress, b.list);
@@ -132,9 +124,6 @@ export default function ChallengePanel() {
             );
           })}
         </div>
-        <button className="btn wide" onClick={() => st().openSandbox()}>
-          进入自由搭建沙盒
-        </button>
       </div>
     );
   }
