@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
+    "tauri": "tauri",
     "build:curriculum": "node --experimental-strip-types scripts/build-curriculum.ts",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
