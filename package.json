@@ -1,6 +1,6 @@
 {
   "name": "z-biz-tool-cpu",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "数字电路与 CPU 构建沙盒：从逻辑门到可运行汇编程序的完整链路",
   "type": "module",
   "scripts": {

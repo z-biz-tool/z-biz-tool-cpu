@@ -1,6 +1,6 @@
 [package]
 name = "z-biz-tool-cpu"
-version = "0.1.0"
+version = "0.1.2"
 description = "CPU 原理教学模拟器"
 edition = "2021"
 
