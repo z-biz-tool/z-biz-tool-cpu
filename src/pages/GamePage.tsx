@@ -1,6 +1,6 @@
 import { Tabs, Tooltip } from "antd";
 import { useEffect, useMemo } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import Canvas from "../editor/Canvas.tsx";
 import Inspector from "../editor/Inspector.tsx";
 import Palette from "../editor/Palette.tsx";
@@ -25,8 +25,16 @@ export default function GamePage() {
   const book = useEditor((s) => s.book);
   const setPanel = useEditor((s) => s.setPanel);
   const navigate = useNavigate();
+  const location = useLocation();
 
   const named = useMemo(() => new Set(workshop.components.map((c) => c.id)).size, [workshop]);
+
+  /* URL 是入口意图的唯一真相：/sandbox 必须是自由搭建，/lesson 才带着判题上下文回来。
+   * 换路由时不重挂载，所以这条 keyed on pathname 的效果要在挂载后的第一帧之前就表态 ——
+   * 走的是 store 的 applyEntry：只摘／还判题上下文，画布一个元件都不动。 */
+  useEffect(() => {
+    useEditor.getState().applyEntry(location.pathname === "/sandbox" ? "sandbox" : "lesson");
+  }, [location.pathname]);
 
   /* 进入本页时：默认把右侧指向「关卡」面板 */
   useEffect(() => {

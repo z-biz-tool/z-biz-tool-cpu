@@ -3,8 +3,8 @@ import { Simulator } from "../core/sim.ts";
 import { CircuitBuilder } from "../core/build.ts";
 import { customCost, defOf, pinProblem, totalCost } from "../core/custom.ts";
 import { baseDef, defaultParams } from "../core/registry.ts";
-import { cloneDesign, emptyDesign, loadSlot, parse, saveSlot, serialize } from "../core/serialize.ts";
-import { DRAFT_LOCK, DraftWriter, EditRight } from "../core/draft.ts";
+import { cloneDesign, emptyDesign, loadSlot, parse, readSlotText, saveSlot, serialize, writeSlotText } from "../core/serialize.ts";
+import { DRAFT_KEY, DRAFT_LOCK, DraftWriter, EditRight } from "../core/draft.ts";
 import { clearPoints, loadPoints, pushPoint, sameDesign, savePoints } from "../core/recovery.ts";
 import type { RecoveryPoint } from "../core/recovery.ts";
 import type { Circuit, CompInstance, CustomDef, Design, PinRef, Point, Rot, Wire } from "../core/types.ts";
@@ -93,6 +93,10 @@ export interface EditorState {
   transactionOpen: boolean;
   levelId: string | null;
   mode: "level" | "sandbox";
+  /** 入口意图（来自 URL）：sandbox = 只要自由搭建，不判题 */
+  entryIntent: EntryIntent;
+  /** 画布上这份活儿来自哪一关（沙盒里也记得回来的路）；纯沙盒为 null */
+  homeLevelId: string | null;
   result: LevelResult | null;
   progress: Progress;
   /** 最近一次判题新拿到的成就 */
@@ -217,6 +221,13 @@ export interface EditorState {
 
   startLevel(id: string): void;
   openSandbox(): void;
+  /**
+   * URL 意图落地：/sandbox 只摘掉判题上下文，/lesson 把它还回来。
+   * 画布与撤销栈都不动 —— 半关卡的活儿本来就在手上，把它清空才是丢数据。
+   */
+  applyEntry(entry: EntryIntent): void;
+  /** 从书架回到某一关的半成品（走关卡自己的存档位，判题上下文一起接上） */
+  resumeLevel(id: string): boolean;
   checkLevel(): LevelResult | null;
 
   setAsm(source: string): void;
@@ -262,6 +273,57 @@ function defaultParamsOf(type: string): Record<string, number | string | boolean
 
 const pinKey = (ref: PinRef) => ref.comp + "." + ref.pin;
 
+/* ------------------------------------------------------------------ *
+ * 入口意图：URL 是真相 —— /sandbox 必须是自由搭建，/lesson 才带判题上下文。
+ * 记在 namespaced UI-prefs 里并带版本号：格式不认识就当没存过，不猜旧数据。
+ * ------------------------------------------------------------------ */
+
+const UI_PREFS_KEY = "z-biz-tool-cpu-ui-prefs";
+const UI_PREFS_V = 1;
+/** 关卡半成品在本地存档位里的前缀：一份关卡草稿一个位，沙盒挤不掉 */
+export const LEVEL_STASH = "level:";
+
+export type EntryIntent = "lesson" | "sandbox";
+
+function readUiPrefs(): { entry?: EntryIntent; home?: string | null } {
+  try {
+    const raw = typeof window !== "undefined" ? window.localStorage.getItem(UI_PREFS_KEY) : null;
+    if (!raw) return {};
+    const p = JSON.parse(raw) as { v?: number; entry?: EntryIntent; home?: string | null };
+    if (p?.v !== UI_PREFS_V) return {};
+    return p;
+  } catch {
+    /* 读不动只是下次开机少一个默认值，不该把应用卡住 */
+    return {};
+  }
+}
+
+function writeUiPrefs(entry: EntryIntent, home: string | null) {
+  try {
+    window.localStorage.setItem(UI_PREFS_KEY, JSON.stringify({ v: UI_PREFS_V, entry, home }));
+  } catch {
+    /* 隐私模式 / 配额满：本次会话的意图仍在内存里，只是下次开机要由 URL 重新表态 */
+  }
+}
+
+/** 开机那一下用哪份意图：路由还没挂载时先看 URL，看不出再用上次记录（headless 自检没有 location） */
+function initialEntry(): EntryIntent {
+  const path = typeof window !== "undefined" ? window.location?.pathname ?? "" : "";
+  if (path.endsWith("/sandbox")) return "sandbox";
+  if (path.endsWith("/lesson")) return "lesson";
+  return readUiPrefs().entry === "sandbox" ? "sandbox" : "lesson";
+}
+
+/**
+ * 把共享草稿的原文逐字抄进「这一关自己的存档位」。
+ * 数据安全第一枪：不解析、不重新序列化 —— 半关卡的活儿原样落盘，
+ * 之后沙盒里的自动存档把共享草稿的关卡绑定改写成 null 也丢不了东西。
+ */
+function stashLevelDraft(levelId: string) {
+  const text = readSlotText(DRAFT_KEY);
+  if (text) writeSlotText(LEVEL_STASH + levelId, text);
+}
+
 /**
  * 这份设计看起来就是某一关的骨架吗（元件同一批、导线同数、子电路同数）。
  * 只用来认「没写关卡绑定的老草稿」：认错的代价不过是多出一个判题入口 ——
@@ -280,6 +342,8 @@ export function looksLikeLevelSkeleton(design: Design, levelId: string): boolean
 }
 
 export const useEditor = create<EditorState>((set, get) => {
+  const initialEntryIntent = initialEntry();
+
   /* ------------------------------------------------------------------ *
    * doc 02 §5.3：自动存档走保存状态机
    *  - 不再每次改动都同步序列化整个设计（拖拽时每帧写一遍 localStorage）
@@ -297,6 +361,11 @@ export const useEditor = create<EditorState>((set, get) => {
     ? undefined
     : (levelById(draft.loadedLevelId) ??
       (looksLikeLevelSkeleton(initialDesign, initialProgress.active) ? levelById(initialProgress.active) : undefined));
+  /* 这份画布是从哪一关来的：草稿自己认领的那一关优先，其次是上次记下的门牌
+   * （在沙盒里进过关、自动存档已把关卡绑定写成 null 时，门牌还是那条回来的路）。 */
+  const bootEntry = initialEntryIntent;
+  const recordedHome = readUiPrefs().home;
+  const bootHome = bootLevel?.id ?? (recordedHome && levelById(recordedHome) ? recordedHome : null);
   const initialWorkshop = loadWorkshopLocal();
   const initialRecovery = loadPoints();
   let sim = new Simulator(initialDesign, currentCircuit(initialDesign, "root"));
@@ -391,10 +460,13 @@ export const useEditor = create<EditorState>((set, get) => {
    */
   const park = (reason: string) => {
     const st = get();
-    /* 没动过的关卡骨架不是用户成果，不该挤掉真正的历史 */
-    const level = st.levelId ? levelById(st.levelId) : undefined;
+    /* 没动过的关卡骨架不是用户成果，不该挤掉真正的历史。
+       沙盒里判题上下文是摘掉的（levelId 为 null），门牌还在，留底时要带上，
+       否则从项目历史回去就只剩下"这份设计认不出自己属于哪一关"。 */
+    const homeId = st.levelId ?? st.homeLevelId;
+    const level = homeId ? levelById(homeId) : undefined;
     if (level && sameDesign(levelDesign(level), st.design)) return;
-    const next = pushPoint(st.recovery, st.design, reason, st.levelId);
+    const next = pushPoint(st.recovery, st.design, reason, level ? level.id : null);
     if (next === st.recovery) return;
     set({ recovery: next, recoverySaved: savePoints(next) });
   };
@@ -421,6 +493,8 @@ export const useEditor = create<EditorState>((set, get) => {
     transactionOpen: false,
     levelId: bootLevel?.id ?? null,
     mode: bootLevel ? "level" : "sandbox",
+    entryIntent: bootEntry,
+    homeLevelId: bootHome ?? null,
     result: null,
     progress: initialProgress,
     earned: [],
@@ -1061,18 +1135,18 @@ export const useEditor = create<EditorState>((set, get) => {
       const design = loadSlot(key);
       if (!design) return false;
       park("读回存档");
-      set({ levelId: null, mode: "sandbox", selection: { comps: [], wires: [] } });
+      set({ levelId: null, homeLevelId: null, mode: "sandbox", selection: { comps: [], wires: [] } });
       replace(design, "root");
       return true;
     },
     newDesign() {
       park("新建空白设计");
-      set({ levelId: null, mode: "sandbox", selection: { comps: [], wires: [] }, undo: [], redo: [] });
+      set({ levelId: null, homeLevelId: null, mode: "sandbox", selection: { comps: [], wires: [] }, undo: [], redo: [] });
       replace(emptyDesign("自由搭建"), "root");
     },
     loadDesign(design) {
       park("载入参考设计");
-      set({ levelId: null, mode: "sandbox", selection: { comps: [], wires: [] }, panel: "cpu" });
+      set({ levelId: null, homeLevelId: null, mode: "sandbox", selection: { comps: [], wires: [] }, panel: "cpu" });
       replace(design, "root");
       get().fitView();
     },
@@ -1086,7 +1160,7 @@ export const useEditor = create<EditorState>((set, get) => {
         report,
         apply: () => {
           park("导入外部设计");
-          set({ levelId: null, mode: "sandbox", selection: { comps: [], wires: [] } });
+          set({ levelId: null, homeLevelId: null, mode: "sandbox", selection: { comps: [], wires: [] } });
           replace(design, "root");
         },
       };
@@ -1101,6 +1175,7 @@ export const useEditor = create<EditorState>((set, get) => {
       park("切换到关卡 " + level.name);
       set({
         levelId: id,
+        homeLevelId: id,
         mode: "level",
         panel: "level",
         running: false,
@@ -1113,11 +1188,14 @@ export const useEditor = create<EditorState>((set, get) => {
       const progress = { ...get().progress, active: id };
       saveProgress(progress);
       set({ progress });
+      /* 门牌跟着关卡走：重载 /lesson 时即使草稿那份绑定还没落盘，也认得回哪一关 */
+      writeUiPrefs(get().entryIntent, id);
     },
     openSandbox() {
       park("进入自由搭建沙盒");
       set({
         levelId: null,
+        homeLevelId: null,
         mode: "sandbox",
         panel: "inspector",
         selection: { comps: [], wires: [] },
@@ -1126,6 +1204,54 @@ export const useEditor = create<EditorState>((set, get) => {
       });
       // 沙盒没有专属存档位：离开时那份已经进了项目历史，要回去走「项目历史」
       replace(emptyDesign("自由搭建"), "root");
+      writeUiPrefs(get().entryIntent, null);
+    },
+    applyEntry(entry) {
+      const st = get();
+      if (entry === "sandbox") {
+        if (st.mode === "level" && st.levelId) stashLevelDraft(st.levelId);
+        const home = st.levelId ?? st.homeLevelId;
+        writeUiPrefs(entry, home);
+        /* 只摘判题上下文：画布、撤销栈、草稿 slot 都不动，所以既不清掉半关卡的活儿，
+           也不因为 mode 变了就重写关卡归属。*/
+        set({ entryIntent: entry, homeLevelId: home, levelId: null, mode: "sandbox", result: null });
+        return;
+      }
+      const home = st.levelId ?? st.homeLevelId;
+      const level = home ? levelById(home) : undefined;
+      writeUiPrefs(entry, level?.id ?? null);
+      if (!level) {
+        /* 这份画布本来就不属于任何关卡（纯沙盒）：判题上下文无从还起，
+           留在沙盒、把选关的入口摆在关卡面板里，比硬塞一个关卡更诚实。 */
+        set({ entryIntent: entry, levelId: null, mode: "sandbox" });
+        return;
+      }
+      set({ entryIntent: entry, homeLevelId: level.id, levelId: level.id, mode: "level", panel: "level" });
+    },
+    resumeLevel(id) {
+      const level = levelById(id);
+      if (!level) return false;
+      const design = loadSlot(LEVEL_STASH + id);
+      if (!design) return false;
+      park("继续关卡 " + level.name);
+      set({
+        entryIntent: "lesson",
+        levelId: level.id,
+        homeLevelId: level.id,
+        mode: "level",
+        panel: "level",
+        running: false,
+        earned: [],
+        selection: { comps: [], wires: [] },
+        undo: [],
+        redo: [],
+      });
+      replace(design, "root");
+      const progress = { ...get().progress, active: level.id };
+      saveProgress(progress);
+      set({ progress });
+      writeUiPrefs("lesson", level.id);
+      return true;
     },
     restoreRecovery(id) {
       const st = get();
@@ -1136,6 +1262,7 @@ export const useEditor = create<EditorState>((set, get) => {
       const level = point.levelId ? levelById(point.levelId) : undefined;
       set({
         levelId: level ? point.levelId : null,
+        homeLevelId: level ? point.levelId : null,
         mode: level ? "level" : "sandbox",
         panel: level ? "level" : "inspector",
         running: false,
@@ -1274,6 +1401,10 @@ export const useEditor = create<EditorState>((set, get) => {
     },
   };
 });
+
+/* 开机先按入口意图收敛一次：/sandbox 落进沙盒（判题摘掉、画布不动、关卡半成品另存
+ * 到自己的存档位），/lesson 才回到判题上下文。路由挂载后每次换 URL 都走同一条动作。 */
+useEditor.getState().applyEntry(initialEntry());
 
 /* --------------------------- 供 UI 使用的辅助 --------------------------- */
 

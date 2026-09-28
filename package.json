@@ -4,6 +4,9 @@
   "license": "MIT",
   "description": "数字电路与 CPU 构建沙盒：从逻辑门到可运行汇编程序的完整链路",
   "type": "module",
+  "engines": {
+    "node": ">=26.0.0"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",

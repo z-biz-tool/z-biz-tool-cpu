@@ -6,9 +6,13 @@ import GamePage from "./pages/GamePage.tsx";
 import ShelfPage from "./pages/ShelfPage.tsx";
 
 /* ------------------------------------------------------------------ *
- * 应用外壳：根据 URL 决定显示书架（/）还是课程页（/lesson）。
+ * 应用外壳：根据 URL 决定显示书架（/）还是编辑器（/lesson、/sandbox）。
  * 两页是两个完全隔离的视图，连编辑器 Chrome 都不共享 —— doc 02 §5.3
  * 要求它们是「两页而不是同一页的两种状态」。
+ *
+ * /lesson 与 /sandbox 共用同一个编辑器外壳：URL 就是入口意图的真相，
+ * GamePage 按 pathname 调 store.applyEntry()。/sandbox 只摘掉判题上下文，
+ * 画布与关卡半成品都不动 —— 清空画布才是丢东西的那条路。
  *
  * 课程页全局快捷键命中 [data-keys='local'] 的区域时必须让位 —— 见 GamePage 的键盘监听。
  * ------------------------------------------------------------------ */

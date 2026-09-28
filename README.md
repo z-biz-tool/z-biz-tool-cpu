@@ -13,12 +13,17 @@ npm run verify     # 内核自检（仿真 / 判题 / 参考 CPU）
 npm run build      # tsc --noEmit && vite build
 ```
 
+运行环境：Node ≥ 26（`.nvmrc` 与 `package.json` 的 `engines` 都说的是它）。
+`npm run verify` 的 LG 一节测的是「运行时自带的真实 Web Locks」，需要 `navigator.locks`
+（Node 自 v24.5.0 起提供，仍是实验特性）。运行时缺它，脚本会在开头明说缺什么、要哪个版本，
+而不是留一条 `→ undefined` 让人猜 —— 那一节失败只代表运行时，不代表产品行为有问题。
+
 | 脚本 | 说明 |
 | --- | --- |
 | `npm run dev` | 启动编辑器 |
 | `npm run build` | 类型检查 + 生产构建 |
 | `npm run typecheck` | 仅 `tsc --noEmit` |
-| `npm run verify` | 41 项内核自检：位宽推断、仿真收敛、31 关参考解答、7 段示例程序 |
+| `npm run verify` | 598 项内核与界面门禁自检：位宽推断、仿真收敛、31 关参考解答、7 段示例程序、草稿与编辑权、源码层门禁 |
 | `npm run format` | Prettier 格式化 |
 
 ## 功能

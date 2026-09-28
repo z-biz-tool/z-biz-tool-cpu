@@ -31,6 +31,16 @@ function mkSim(root: Circuit, defs: Design["defs"] = []): Simulator {
   return new Simulator(design, root);
 }
 
+/* 运行时门禁说在前头：LG 一节测的是「运行时自带的真实 Web Locks」，靠 navigator.locks
+ * （Node 自 v24.5.0 起提供，仍是实验特性）。缺它不是代码有问题，是让这一节无从可测 ——
+ * 先把要求的版本念出来，别留一条 `→ undefined` 让人猜。支持版本见 .nvmrc 与 engines。 */
+if (!globalThis.navigator?.locks?.request) {
+  console.log(
+    `\x1b[33m运行时：Node ${process.version} 没有 navigator.locks，下面的 LG 一节会失败。` +
+      "请用 .nvmrc 指定的 Node（>=26，navigator.locks 自 v24.5.0 起为实验特性）跑 npm run verify。\x1b[0m"
+  );
+}
+
 function out(sim: Simulator, comp: string, pin = "in") {
   return sim.valueOf({ comp, pin })?.value ?? -1;
 }
@@ -2218,7 +2228,11 @@ ok:
     const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
     const realNav = Object.getOwnPropertyDescriptor(globalThis, "navigator");
     const hasRealLocks = !!globalThis.navigator?.locks?.request;
-    check("LG: 运行时自带真实 Web Locks", hasRealLocks, typeof navigator?.locks);
+    check(
+      "LG: 运行时自带真实 Web Locks",
+      hasRealLocks,
+      hasRealLocks ? "" : `当前 Node ${process.version} 无 navigator.locks —— 需要 >=26（.nvmrc / engines；v24.5.0 起为实验特性）`
+    );
 
     if (hasRealLocks) {
       const store = new Map<string, string>();

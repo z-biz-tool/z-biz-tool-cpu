@@ -1,14 +1,17 @@
 import { Progress } from "antd";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { FAST_LEVELS, LEVELS, STORAGE_LEVELS } from "../challenges/levels.ts";
+import { FAST_LEVELS, LEVELS, STORAGE_LEVELS, levelById } from "../challenges/levels.ts";
 import type { Level } from "../challenges/levels.ts";
 import { passed } from "../challenges/progress.ts";
 import type { Progress as ProgressState } from "../challenges/progress.ts";
-import { useEditor } from "../editor/store.ts";
+import { DRAFT_KEY } from "../core/draft.ts";
+import { listSlots } from "../core/serialize.ts";
+import { MAX_POINTS } from "../core/recovery.ts";
+import { LEVEL_STASH, useEditor } from "../editor/store.ts";
 
 /* ------------------------------------------------------------------ *
- * 书架主页：3 张书卡 + 动态背景 + 入场动画 + 3D 悬停
+ * 书架主页：3 张书卡 + 动态背景 + 入场动画 + 3D 悬停 + 项目库
  * ------------------------------------------------------------------ */
 
 type BookKey = "logic" | "memory" | "fast";
@@ -146,15 +149,139 @@ export default function ShelfPage() {
         ))}
       </div>
 
+      <ProjectLibrary onRow={(e) => navigate(e.to)} />
+
       <footer className="shelf-page-foot">
         <button className="btn ghost sand" onClick={() => navigate("/sandbox")}>
           <span className="sand-glyph">⊟</span>
           <span>没有关卡在手？直接进自由搭建沙盒</span>
           <span className="sand-arrow">→</span>
         </button>
-        <span className="foot-tip">每一次保存都会进入项目历史，回到任何一步都不丢数据</span>
+        <span className="foot-tip">
+          整盘替换（新建／切关／导入／读档）前都会自动留底进项目历史，最多 {MAX_POINTS} 份；「存档」是一个可覆盖的存档位
+        </span>
       </footer>
     </div>
+  );
+}
+
+/* ---------------- 项目库：把本地真有的可回条目摊开 ---------------- */
+
+interface Entry {
+  key: string;
+  kind: string;
+  name: string;
+  at: number;
+  meta: string;
+  cta: string;
+  /** 落地路由：关卡那一份回 /lesson（判题上下文要回来），其余回沙盒 */
+  to: string;
+  run: () => boolean;
+}
+
+function whenText(t: number): string {
+  if (!t) return "时间未知";
+  const d = new Date(t);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return new Date().toDateString() === d.toDateString() ? `今天 ${hm}` : `${d.getMonth() + 1}/${d.getDate()} ${hm}`;
+}
+
+function collectEntries(): Entry[] {
+  const out: Entry[] = [];
+  for (const s of listSlots()) {
+    /* 草稿位不是「可回某一步」：它就是画布上这一份，列出来只会让人以为它是另一条退路 */
+    if (s.key === DRAFT_KEY) continue;
+    const at = Date.parse(s.savedAt) || 0;
+    if (s.key.startsWith(LEVEL_STASH)) {
+      const id = s.key.slice(LEVEL_STASH.length);
+      const level = levelById(id);
+      out.push({
+        key: s.key,
+        kind: "关卡半成品",
+        name: level?.name ?? s.name,
+        at,
+        meta: level ? `离开时的那一关 · ${level.id}` : "关卡已不在书目里",
+        cta: "继续这一关",
+        to: "/lesson",
+        run: () => useEditor.getState().resumeLevel(id),
+      });
+    } else {
+      const conflict = s.key.startsWith("conflict-");
+      out.push({
+        key: s.key,
+        kind: conflict ? "冲突副本" : "存档位",
+        name: s.name,
+        at,
+        meta: conflict ? "另一个标签页改过草稿时另存的那一份" : "编辑器里「存档」写下的那一份",
+        cta: "打开",
+        to: "/sandbox",
+        run: () => useEditor.getState().loadFrom(s.key),
+      });
+    }
+  }
+  useEditor.getState().recovery.forEach((p) => {
+    const level = p.levelId ? levelById(p.levelId) : undefined;
+    out.push({
+      key: p.id,
+      kind: "项目历史",
+      name: p.name,
+      at: p.at,
+      meta: `${p.reason} · ${p.comps} 件 / ${p.wires} 线${level ? ` · ${level.name}` : ""}`,
+      cta: "回到这一份",
+      to: level ? "/lesson" : "/sandbox",
+      run: () => useEditor.getState().restoreRecovery(p.id),
+    });
+  });
+  return out.sort((a, b) => b.at - a.at);
+}
+
+function ProjectLibrary({ onRow }: { onRow: (e: Entry) => void }) {
+  const recovery = useEditor((s) => s.recovery);
+  const recoverySaved = useEditor((s) => s.recoverySaved);
+  const [failed, setFailed] = useState("");
+  /* 条目每次翻回书架都重数一遍：存档位与项目历史都是本地存储里的真东西 */
+  const entries = useMemo(() => collectEntries(), [recovery]);
+
+  const open = (e: Entry) => {
+    if (e.run()) {
+      setFailed("");
+      onRow(e);
+      return;
+    }
+    setFailed(`「${e.name}」这一份已经不在本地存储里了，画布没有动。`);
+  };
+
+  return (
+    <section className="shelf-library" aria-label="项目库">
+      <header className="lib-head">
+        <span className="lib-title">项目库</span>
+        <span className="lib-sub mono">
+          本地可回的条目 {entries.length} 条 · 项目历史最多留 {MAX_POINTS} 份
+          {recovery.length && !recoverySaved ? " · 历史没写进本地存储，本次会话内有效" : ""}
+        </span>
+      </header>
+      {entries.length === 0 ? (
+        <p className="lib-empty">
+          还没有可回的项目：编辑器里点「存档」，或做过一次整盘替换（新建／切关／导入／进沙盒）就会出现在这里。
+        </p>
+      ) : (
+        <ul className="lib-list">
+          {entries.map((e) => (
+            <li key={e.key} className="lib-row">
+              <span className="lib-kind mono">{e.kind}</span>
+              <span className="lib-name">{e.name}</span>
+              <span className="lib-meta">{e.meta}</span>
+              <span className="lib-when mono">{whenText(e.at)}</span>
+              <button className="btn ghost small" onClick={() => open(e)}>
+                {e.cta} →
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {!!failed && <p className="lib-fail">{failed}</p>}
+    </section>
   );
 }
 
