@@ -37,7 +37,9 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          # 与 .nvmrc / engines / ci.yml 对齐：同一个仓在三条流水线上跑三个 Node
+          # 版本，迟早有一条会跑到装不上的依赖上。
+          node-version: 26
           cache: npm
 
       - name: Setup Rust

@@ -28,9 +28,12 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          # verify / build:curriculum 直接 `node xxx.ts` 跑 TypeScript，靠 node 的原生类型剥离；
-          # 本机就是 24+，这里对齐，不用 22 去赌那条 flag 的版本边界。
-          node-version: 24
+          # 对齐 .nvmrc 与 engines（都是 26），不是"挑一个能跑的就是对的"。
+          # verify / build:curriculum 直接 `node xxx.ts` 跑 TypeScript，靠 node 的原生
+          # 类型剥离；LG 一节还要 navigator.locks（node 自 v24.5 起提供）。本机实跑
+          # 24.21.0 也能过，但那时 CI 跑的是一个**本仓声明不支持**的版本 ——
+          # 一旦代码用到 26 才有的东西，CI 抓不到。
+          node-version: 26
           cache: npm
 
       # npm ci 而非 install：install 允许与 package-lock.json 漂移，那样"CI 绿"不对应任何一份确定的依赖树。
