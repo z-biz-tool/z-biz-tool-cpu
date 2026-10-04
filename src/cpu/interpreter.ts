@@ -114,6 +114,32 @@ function storeWord(mem: Map<number, number>, addr: number, value: number) {
   mem.set(addr & MASK16, value & MASK16);
 }
 
+/**
+ * 取指/取数：**mem 是唯一权威存储，program 数组只作兜底。**
+ *
+ * 2026-10-04 修一个真 bug。此前 LDA 写成
+ * `program ? program[addr] : takeWord(state.mem, addr)`，而 STA 永远写
+ * `state.mem` —— 两边用了不同的存储，于是**同一条程序的结果取决于调用方
+ * 有没有传 program 数组**：
+ *
+ *   ldi r2, 0x20 / ldi r0, 123 / st r0,[r2] / ld r1,[r2] / out r1
+ *   runToHalt(state, program)  →  out = [0]      ❌ 存进去的读不回来
+ *   runToHalt(state)           →  out = [123]    ✅
+ *
+ * 两条路径必须给出同一个答案，否则本文件头里说的「差分验证」就不可信 ——
+ * 拿一个读不回自己存储的解释器去比对电路实现，差分出来的差异分不清是
+ * 电路错了还是解释器错了。
+ *
+ * 为什么 mem 优先而不是反过来：`loadProgram` 已经把程序字装进 `state.mem`，
+ * STA 也只写 mem；`program` 参数本质是只读快路径。self-modifying 程序
+ * （往自己代码段写）同样只有 mem 优先才是对的 —— 否则 LDI 读到的仍是旧指令字。
+ */
+function fetchWord(state: InterpreterState, program: number[] | undefined, addr: number): number {
+  const a = addr & MASK16;
+  if (state.mem.has(a)) return takeWord(state.mem, a);
+  return program ? (program[a] & MASK16) : 0;
+}
+
 function checkCond(cond: number, flags: number): boolean {
   const z = (flags & FLAG_Z) !== 0;
   const c = (flags & FLAG_C) !== 0;
@@ -175,7 +201,7 @@ export function stepOnce(state: InterpreterState, program?: number[]): Interpret
       break;
     }
     case OP.LDI: {
-      const imm = (program ? program[(state.pc + 1) & MASK16] : takeWord(state.mem, state.pc + 1));
+      const imm = fetchWord(state, program, state.pc + 1);
       state.regs[dec.a] = imm & MASK16;
       pcAdvanced = 2;
       break;
@@ -228,7 +254,7 @@ export function stepOnce(state: InterpreterState, program?: number[]): Interpret
     }
     case OP.LDA: {
       const addr = state.regs[dec.b] & MASK16;
-      state.regs[dec.a] = (program ? program[addr] : takeWord(state.mem, addr)) & MASK16;
+      state.regs[dec.a] = fetchWord(state, program, addr) & MASK16;
       break;
     }
     case OP.STA: {
@@ -268,9 +294,15 @@ export function stepOnce(state: InterpreterState, program?: number[]): Interpret
           break;
         }
         case SYS.POP: {
-          const sp = (state.regs[REG_SP] + 1) & MASK16;
-          state.regs[REG_SP] = sp;
+          // 2026-10-04 修一个真 bug：原先写成
+          //   const sp = (SP + 1) & MASK16; SP = sp; r = mem[sp];
+          // 即**先自增再读**，与 PUSH 的「先自减再写」不配对 ——
+          // PUSH 把值放在 SP−1，POP 却去读 (SP−1)+1，正好错开一格。
+          // 实测：`ldi r6,0x100 / push r0(55) / pop r1` 得到 0，且 mem[0xff] 从未被写过。
+          // 递减栈的正确配对是：先读当前 SP，再自增。
+          const sp = state.regs[REG_SP] & MASK16;
           state.regs[dec.a] = takeWord(state.mem, sp);
+          state.regs[REG_SP] = (sp + 1) & MASK16;
           break;
         }
         case SYS.OUT: {
@@ -324,6 +356,13 @@ export function runToHalt(state: InterpreterState, program?: number[], maxSteps 
     const ev = stepOnce(state, program);
     if (!ev) break;
     events.push(ev);
+  }
+  // 2026-10-04：撞上限时原来**什么都不说**就返回。调用方分不清
+  // 「程序跑完了」和「我跑不动放弃了」—— 本文件的用途是差分验证与失败回放，
+  // 把截断的运行当成完整运行，正是最容易产出假信心的地方。
+  // 故显式留痕：只给 fault，不改 halted（确实没停机）。
+  if (!state.halted && events.length >= maxSteps) {
+    state.fault = `步数上限 ${maxSteps} 被打断（未停机）`;
   }
   return events;
 }
