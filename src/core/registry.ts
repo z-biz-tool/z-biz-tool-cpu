@@ -5,29 +5,99 @@ import type { CompDef, EvalCtx, ParamSpec, PinSpec } from "./types.ts";
  * 元件库：所有内置元件的定义与求值逻辑
  * ------------------------------------------------------------------ */
 
-/** 解析 "0x12,34, 0b1010 / 17" 形式的数据串 */
+/**
+ * 数据串的分隔符。
+ *
+ * 只认空白、逗号、分号。**斜杠不算** —— 本函数原先的注释示例写的是
+ * "0x12,34, 0b1010 / 17"，但代码里的 split 是 /[\s,;]+/，不含 `/`。
+ * 于是照注释写数据串的人会遇到 `0b1010 / 17` 被当成**一个**词元
+ * （实测 parseDataListStrict 报 error.token === "0b1010" 且整段失败）。
+ * 注释已改成与实现一致；分隔符集中到这里，两处共用，避免再次漂移。
+ */
+const DATA_TOKEN_SPLIT = /[\s,;]+/;
+
+/** 解析 "0x12, 34, 0b1010, 17" 形式的数据串（分隔符：空白 / 逗号 / 分号） */
 export function parseDataList(src: string): number[] {
   if (!src.trim()) return [];
   return src
-    .split(/[\s,;]+/)
+    .split(DATA_TOKEN_SPLIT)
     .filter(Boolean)
     .map((tok) => parseWordToken(tok));
 }
 
-export function parseWordToken(tok: string): number {
-  const t = tok.trim().toLowerCase();
-  if (!t) return 0;
-  if (t.startsWith("0x")) return parseInt(t.slice(2) || "0", 16) >>> 0;
-  if (t.startsWith("0b")) return parseInt(t.slice(2) || "0", 2) >>> 0;
-  if (t.startsWith("0o")) return parseInt(t.slice(2) || "0", 8) >>> 0;
-  if (t.startsWith("'") && t.length >= 2) {
-    // 字符字面量 'A'
-    const inner = t.replace(/'/g, "");
-    const code = inner.charCodeAt(0);
-    return Number.isFinite(code) ? code : 0;
+/**
+ * 严格版：任何一个词元非法就**整体失败**，并报出错的第几个、原文是什么。
+ *
+ * 与 parseDataList 的区别不是「更严」而是**可见**：
+ * parseDataList 会把 "1,2,0b12,4" 里的 0b12 变成 1，长度不变、无声无息；
+ * 加载一段内存镜像时，这等于让用户拿到的程序与他写的不一样。
+ * 这个函数把「解析失败」变成调用方能展示、能拒绝的显式结果。
+ */
+export function parseDataListStrict(src: string): {
+  values: number[];
+  ok: boolean;
+  error?: { index: number; token: string };
+} {
+  if (!src.trim()) return { values: [], ok: true };
+  const tokens = src.split(DATA_TOKEN_SPLIT).filter(Boolean);
+  const values: number[] = [];
+  for (let i = 0; i < tokens.length; i++) {
+    const v = parseWordTokenStrict(tokens[i]);
+    if (v === null) return { values: [], ok: false, error: { index: i, token: tokens[i] } };
+    values.push(v);
   }
-  const n = Number(t);
-  return Number.isFinite(n) ? n >>> 0 : 0;
+  return { values, ok: true };
+}
+
+/**
+ * 一个词法单元的严格解析。
+ *
+ * 2026-10-04 拆出来的原因：原先 parseWordToken 直接用 parseInt，而
+ * **parseInt 遇到非法位会「停在第一个合法位并返回已解析部分」，不报错**。
+ * 实测：
+ *     parseWordToken("0b12")  === 1   ← 笔误被当成合法的 1
+ *     parseWordToken("0b102") === 2
+ *     parseWordToken("0xZZ")  === 0
+ * 现场表现是「敲错一位 → 内存里那个字节悄悄变成另一个值」，
+ * 电路照跑、结果全错，而界面上没有任何提示。这比直接拒绝难查得多。
+ *
+ * 改为整串校验：带前缀的必须**整串都是该进制的合法位**，否则返回 null。
+ */
+export function parseWordTokenStrict(tok: string): number | null {
+  const t = tok.trim().toLowerCase();
+  if (!t) return null;
+  const unsigned = (n: number) => (Number.isFinite(n) ? n >>> 0 : null);
+  if (t.startsWith("0x")) {
+    const body = t.slice(2);
+    return /^[0-9a-f]+$/.test(body) ? unsigned(parseInt(body, 16)) : null;
+  }
+  if (t.startsWith("0b")) {
+    const body = t.slice(2);
+    return /^[01]+$/.test(body) ? unsigned(parseInt(body, 2)) : null;
+  }
+  if (t.startsWith("0o")) {
+    const body = t.slice(2);
+    return /^[0-7]+$/.test(body) ? unsigned(parseInt(body, 8)) : null;
+  }
+  if (t.startsWith("'")) {
+    // 字符字面量 'A'；只取第一个字符
+    const inner = t.replace(/'/g, "");
+    if (!inner) return null;
+    return unsigned(inner.charCodeAt(0));
+  }
+  // 十进制：只接受纯数字（可带负号），拒绝 1e3 / 0x / Infinity / NaN / undefined
+  if (!/^-?\d+$/.test(t)) return null;
+  return unsigned(Number(t));
+}
+
+/**
+ * 宽松版：**保持既有返回类型**（非法 → 0）。
+ *
+ * ⚠️ 它会把非法输入变成 0。请优先用 parseWordTokenStrict /
+ * parseDataListStrict，只有明确知道「0 是个可接受的兜底」时才用这个。
+ */
+export function parseWordToken(tok: string): number {
+  return parseWordTokenStrict(tok) ?? 0;
 }
 
 function pin(id: string, x: number, y: number, dir: PinSpec["dir"], kind: PinSpec["kind"], extra: Partial<PinSpec> = {}): PinSpec {
