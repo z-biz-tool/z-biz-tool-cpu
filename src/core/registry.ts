@@ -406,7 +406,14 @@ export const BUILTIN_DEFS: CompDef[] = [
         case 6: {
           const sh = b & 31;
           out = (a << sh) & m;
-          carry = sh ? (a >>> (bits - sh)) & 1 : 0;
+          // carry = 被移出的**最高位**，与 sh 无关。
+          // 左移 sh 位时移出的是最高 sh 位，最后移出的那一位恒是最高位。
+          // 原实现写的是 (a >>> (bits - sh)) & 1：sh=1 时碰巧对，
+          // sh>=2 取到了更低的位；sh>bits 时 bits-sh 为负，JS 的 >>> 按 32 取模
+          // 后读到完全无关的位（实测 8 位 a=0x80 左移 8 位，carry 报 0）。
+          // 这个信号会并进参考 CPU 的标志寄存器（src/cpu/reference.ts:443），
+          // 所以错了是 `shl` 指令的 C 标志错，不是死代码。
+          carry = sh ? (a >>> (bits - 1)) & 1 : 0;
           break;
         }
         default: {
@@ -452,7 +459,12 @@ export const BUILTIN_DEFS: CompDef[] = [
       if (c.p<string>("dir") === "left") {
         c.w("out", (a << sh) & m);
       } else if (c.p<boolean>("arith")) {
-        c.w("out", toSignedLocal(a, bits) >> sh);
+        // 符号右移会算出**负数**（toSignedLocal 返回有符号值），必须自己掩回位宽。
+        // 左右两个分支都写了 & m，只有这一支原先没写，只能指望 c.w 兜底 ——
+        // 而 c.w 是按**网络宽度**掩的（netlist.ts:287：网络宽度取相连引脚的最大值），
+        // 8 位的 shift 接到一条同时挂着 16 位引脚的网络上时，c.w 不会替它收窄，
+        // 线上留下的是 0xFFC0 而不是 0x00C0。
+        c.w("out", (toSignedLocal(a, bits) >> sh) & m);
       } else {
         c.w("out", bits >= 32 ? a >>> sh : (a >>> sh) & m);
       }
@@ -988,7 +1000,10 @@ function expandInputs(def: CompDef, params: Record<string, number | string | boo
   const isDemux = def.type === "demux";
   const baseData = def.pins.filter((p) => p.kind === "in" && /^i\d/.test(p.id)).length;
   const baseOuts = def.pins.filter((p) => p.kind === "out" && /^o\d/.test(p.id)).length;
-  const raw = hasCount ? Number(params.inputs) || 0 : 0;
+  // 取整：params 来自电路 JSON，import 不校验，2.7 这样的值能一路流到这里。
+  // 不取整时引脚循环 `i < n` 取到上界、而 cost 和 size.h 保留原值，
+  // 同一份数据两套口径（3 个引脚 / cost 3.7 / 高 3.7 格）。
+  const raw = hasCount ? Math.floor(Number(params.inputs) || 0) : 0;
   const n = Math.max(1, Math.min(8, raw || (isDemux ? baseOuts : baseData || 2)));
   const w = def.size.w;
   const h = isMux ? n + 1 : isDemux ? Math.max(2, n) : Math.max(1, n);
@@ -1009,7 +1024,9 @@ function expandInputs(def: CompDef, params: Record<string, number | string | boo
 
 /** split / merge 的逐位引脚按位宽生成 */
 function expandBits(def: CompDef, params: Record<string, number | string | boolean>): CompDef {
-  const bits = Math.max(1, Math.min(32, Number(params.bitWidth) || 4));
+  // 先取整**再**当缺省处理：否则 0 走 `|| 4` 落到默认 4 位，
+  // 而 0.9 截断成 0 后会被 max(1,·) 夹到 1 位 —— 同一个「其实是 0」出现两种结果。
+  const bits = Math.max(1, Math.min(32, Math.floor(Number(params.bitWidth) || 0) || 4));
   const h = Math.max(2, bits);
   const pins: PinSpec[] = [];
   const wide = def.pins.find((p) => p.widthParam === "bitWidth")!;
