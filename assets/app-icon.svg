@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#123C6E"/>
+      <stop offset="1" stop-color="#34E8D2"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#7FF9E8" stop-opacity="0.85"/>
+      <stop offset="1" stop-color="#7FF9E8" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect x="72" y="72" width="880" height="880" rx="232" fill="url(#bg)"/>
+
+  <!-- 引脚：四边各 4 根 -->
+  <g fill="#F2F7FA">
+    <rect x="372" y="216" width="34" height="96" rx="17"/>
+    <rect x="454" y="216" width="34" height="96" rx="17"/>
+    <rect x="536" y="216" width="34" height="96" rx="17"/>
+    <rect x="618" y="216" width="34" height="96" rx="17"/>
+
+    <rect x="372" y="712" width="34" height="96" rx="17"/>
+    <rect x="454" y="712" width="34" height="96" rx="17"/>
+    <rect x="536" y="712" width="34" height="96" rx="17"/>
+    <rect x="618" y="712" width="34" height="96" rx="17"/>
+
+    <rect x="216" y="372" width="96" height="34" rx="17"/>
+    <rect x="216" y="454" width="96" height="34" rx="17"/>
+    <rect x="216" y="536" width="96" height="34" rx="17"/>
+    <rect x="216" y="618" width="96" height="34" rx="17"/>
+
+    <rect x="712" y="372" width="96" height="34" rx="17"/>
+    <rect x="712" y="454" width="96" height="34" rx="17"/>
+    <rect x="712" y="536" width="96" height="34" rx="17"/>
+    <rect x="712" y="618" width="96" height="34" rx="17"/>
+  </g>
+
+  <!-- 封装 -->
+  <rect x="292" y="292" width="440" height="440" rx="84" fill="#FFFFFF"/>
+
+  <!-- 裸片 -->
+  <rect x="380" y="380" width="264" height="264" rx="56" fill="#122A33"/>
+  <circle cx="512" cy="512" r="150" fill="url(#glow)"/>
+  <rect x="450" y="450" width="124" height="124" rx="34" fill="#34E8D2"/>
+
+  <!-- 1 号脚标记 -->
+  <circle cx="344" cy="344" r="22" fill="#FF6B6B"/>
+</svg>
