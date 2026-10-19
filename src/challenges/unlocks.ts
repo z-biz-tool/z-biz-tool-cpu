@@ -26,7 +26,13 @@ export const ALWAYS_UNLOCKED = new Set([
 /** 每关解锁的元件集合（关卡 id → 元件 type 列表） */
 export const UNLOCKS: Record<string, string[]> = {
   /* CPU 书 */
-  t1gates: ["nand", "not", "and", "or", "xor", "xnor"], // 统一所有第一层门解锁到第一关
+  // ⚠️ 这里原来还有一条 `t1gates:`（与下一行同一个意思），但 **`t1gates` 不是关卡 id**
+  // （真 id 是 `t1-gates`，见 LEVEL_IDS）—— 那是一条**永不生效**的死条目：
+  //   · `unlockedTypesFromDone` 会 `levelById` 查不到就跳过，所以解锁功能看起来是对的；
+  //   · 但 `unlockSource` 是「按 UNLOCKS 的插入顺序取第一个匹配」，
+  //     于是它给用户报的是 **"通过 t1gates 解锁"** —— 一个用户根本找不到的关卡。
+  // 同一个表被两个消费者按**不同口径**读（一个跳过不认识的，一个不跳过），
+  // 差异就长成了界面上的一句错话。已删掉死条目。
   "t1-gates": ["nand", "not", "and", "or", "xor", "xnor"],
   "t1-mux2": ["mux", "demux"],
   "t2-addsub": ["add", "sub"],
