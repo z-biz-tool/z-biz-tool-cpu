@@ -1,6 +1,6 @@
 [package]
 name = "z-biz-tool-cpu"
-version = "0.1.2"
+version = "0.2.0"
 description = "CPU 原理教学模拟器"
 edition = "2021"
 license = "MIT"
