@@ -1,13 +1,15 @@
-import { Button, Modal, Progress, Tag, Tooltip } from "antd";
+import { Button, Modal, Popconfirm, Progress, Tag, Tooltip } from "antd";
 import { useState } from "react";
 import {
   FAST_LEVELS,
   LEVELS,
   STORAGE_LEVELS,
   TIERS,
+  hasSolution,
   levelById,
   parCost,
 } from "../../challenges/levels.ts";
+import { PROLOGUE_LEVELS } from "../../challenges/prologue.ts";
 import { catchupLevels, missingPrereqs } from "../../challenges/prereq.ts";
 import { BADGES, passed, scoreOf, tierDone } from "../../challenges/progress.ts";
 import type { Progress as ProgressState, Badge } from "../../challenges/progress.ts";
@@ -36,6 +38,7 @@ export default function ChallengePanel() {
   const mode = useEditor((s) => s.mode);
   const design = useEditor((s) => s.design);
   const book = useEditor((s) => s.book);
+  const solutionSeen = useEditor((s) => s.solutionSeen);
   const setBook = useEditor((s) => s.setBook);
   const st = useEditor.getState;
   const level = levelById(levelId ?? "");
@@ -108,6 +111,48 @@ export default function ChallengePanel() {
         <span className="tag">成就 {score.badges}/{BADGES.length}</span>
       </div>
 
+      {/* 序章三关：难度为零，但「拖、连、跑」三件事各练一遍。
+          没有它们，第一关就同时要求会用电路 + 会接门，门槛全堆在门口。 */}
+      {showLogic && (
+        <section className="tier">
+          <div className="tier-head">
+            <span>序章 · 先练手感</span>
+            <Tooltip title="三关各只有一步操作，不含任何陷阱：点亮灯 → 接回断线 → 让触发器在上升沿收件。做完再进第一层。">
+              <Progress
+                percent={Math.round(
+                  (PROLOGUE_LEVELS.filter((l) => passed(progress, l.id)).length /
+                    PROLOGUE_LEVELS.length) *
+                    100
+                )}
+                size="small"
+                format={() => `${PROLOGUE_LEVELS.filter((l) => passed(progress, l.id)).length}/3`}
+                status={
+                  PROLOGUE_LEVELS.every((l) => passed(progress, l.id)) ? "success" : "active"
+                }
+              />
+            </Tooltip>
+          </div>
+          <div className="tier-items">
+            {PROLOGUE_LEVELS.map((l) => {
+              const done = passed(progress, l.id);
+              return (
+                <button
+                  key={l.id}
+                  className={
+                    "lv" + (l.id === levelId ? " on" : "") + (done ? " done" : "")
+                  }
+                  onClick={() => st().startLevel(l.id)}
+                  title={l.brief}
+                >
+                  <span className="lv-no">{done ? "✓" : "0"}</span>
+                  <span className="lv-name">{l.name}</span>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
       {showLogic && (
         <div className="level-list">
           {TIERS.map((t) => {
@@ -152,6 +197,11 @@ export default function ChallengePanel() {
                         </span>
                         <span className="lv-name">{l.name}</span>
                         {missing.length > 0 && <span className="lv-gap mono">先修 {missing.length}</span>}
+                        {solutionSeen.includes(l.id) && (
+                          <span className="lv-gap mono" title="看过这一关的参考解">
+                            看过答案
+                          </span>
+                        )}
                         {rec?.pass && <span className="lv-cost mono">{rec.cost}</span>}
                       </button>
                     );
@@ -194,6 +244,21 @@ export default function ChallengePanel() {
             <button className="btn primary" onClick={() => st().checkLevel()}>
               运行测试
             </button>
+            {hasSolution(level.id) ? (
+              <Popconfirm
+                title="载入这一关的参考解？"
+                description="会用官方解答替换画布（⌘Z 可撤销）。载入后会记一笔「看过答案」，判题照旧，只是不假装是自己做出来的。"
+                okText="载入参考解"
+                cancelText="再想想"
+                onConfirm={() => st().loadSolution()}
+              >
+                <button className="btn">看参考解</button>
+              </Popconfirm>
+            ) : (
+              <Tooltip title="这一关只有一步操作，看了答案就等于做完了 —— 所以没有答案，只有提示">
+                <span className="tag">无参考解</span>
+              </Tooltip>
+            )}
             {level.hint && (
               <Tooltip title={level.hint}>
                 <span className="tag">提示</span>
@@ -215,6 +280,11 @@ export default function ChallengePanel() {
               {settle && (
                 <p className={"note " + settle.tone}>
                   {settle.label}：{settle.detail}
+                </p>
+              )}
+              {solutionSeen.includes(level.id) && (
+                <p className="note">
+                  这一关看过参考解。建议先把解答里最关键的那根线删掉，自己再接回去一遍 —— 那一步才是真正学到的部分。
                 </p>
               )}
               {result.notes.map((n, i) => (

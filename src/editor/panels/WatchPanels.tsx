@@ -237,6 +237,18 @@ export function HelpPanel() {
   const doc = isaDoc();
   return (
     <div className="panel-body help">
+      {/* EDU-01：手册第一屏先说「怎么开始」，快捷键表放在它后面 */}
+      <div className="sub-title">上手三步</div>
+      <ol className="panel-note" style={{ paddingLeft: 16, lineHeight: 1.9 }}>
+        <li>书架 → 选一本书 → 点第一关（序章三关没有陷阱，专门练手感）。</li>
+        <li>关卡面板里读「任务」和「讲解」，需要时点「提示」；实在卡住点「看参考解」（⌘Z 可退回）。</li>
+        <li>元件从左侧拖进画布 → 用 <code>W</code> 连线 → <code>空格</code> 运行 → 点「运行测试」判题。</li>
+      </ol>
+      <div className="panel-note">
+        想先看别人怎么接？右侧「工坊」→「打开案例库」里有 100 个现成电路（半加器到迷你 CPU），
+        每个都能一键放进画布、拆开改，并且带「为什么值得看」的说明。
+      </div>
+
       <div className="sub-title">快捷键</div>
       <table className="help-keys">
         <tbody>

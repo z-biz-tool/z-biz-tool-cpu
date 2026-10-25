@@ -9,7 +9,8 @@ import { clearPoints, loadPoints, pushPoint, sameDesign, savePoints } from "../c
 import type { RecoveryPoint } from "../core/recovery.ts";
 import type { Circuit, CompInstance, CustomDef, Design, PinRef, Point, Rot, Wire } from "../core/types.ts";
 import { GRID, uid } from "../core/types.ts";
-import { levelById, levelDesign } from "../challenges/levels.ts";
+import { levelById, levelDesign, solutionDesign } from "../challenges/levels.ts";
+import { loadPeeked, markPeeked } from "../challenges/peeked.ts";
 import { runLevelTests } from "../challenges/verify.ts";
 import type { LevelResult } from "../challenges/verify.ts";
 import { applyResult, loadProgress, saveProgress } from "../challenges/progress.ts";
@@ -19,8 +20,9 @@ import type { AsmResult, ListingLine } from "../asm/assembler.ts";
 import { assemblesSample } from "../asm/samples.ts";
 import { DebouncedSaver, nextSaveState } from "../project/saveState.ts";
 import type { SaveState } from "../project/saveState.ts";
-import type { WorkshopState } from "../workshop/index.ts";
+import type { ComponentManifest, WorkshopState } from "../workshop/index.ts";
 import { addOrUpdate, findComponent, lacksMeta, loadWorkshopLocal, removeVersion, saveWorkshopLocal } from "../workshop/index.ts";
+import { galleryManifests } from "../workshop/gallery/manifest.ts";
 
 /* ------------------------------------------------------------------ *
  * 编辑器状态中枢：设计数据 + 仿真器 + 视图 + 关卡 + 汇编
@@ -113,6 +115,8 @@ export interface EditorState {
   workshop: WorkshopState;
   /** doc 05 §4：刚封装完、等着补名称说明与端口说明的子电路 */
   pendingMeta: { defId: string } | null;
+  /** EDU-02：看过参考解的关卡 id（如实记账，不拦判题，但界面上要说出来） */
+  solutionSeen: string[];
   /** doc 02 §5.3：草稿落盘状态，独立于运行状态 */
   save: SaveState;
   /** doc 02 §6.1：被「新建／切关／导入」整盘换掉的设计留下的恢复点，最新的在前 */
@@ -229,6 +233,11 @@ export interface EditorState {
   /** 从书架回到某一关的半成品（走关卡自己的存档位，判题上下文一起接上） */
   resumeLevel(id: string): boolean;
   checkLevel(): LevelResult | null;
+  /**
+   * EDU-02：把当前关卡的参考解载进画布（可撤销）。
+   * 看过就记一笔在 solutionSeen 里 —— 判题照旧，但不假装是自己做出来的。
+   */
+  loadSolution(): boolean;
 
   setAsm(source: string): void;
   setAsmTarget(compId: string): void;
@@ -255,6 +264,13 @@ export interface EditorState {
   removeWorkshopVersion(id: string, version: number): void;
   /** 把工坊组件放到画布中心；当前设计缺少该子电路时先登记 */
   useWorkshopComponent(id: string, version?: number): boolean;
+  /**
+   * 把案例库的组件装进工坊（不传 ids 就是全部 100 个）。
+   * 返回这次真正新增的个数：已经有的不重复登记，重复调用是安全的。
+   */
+  loadGallery(ids?: string[]): number;
+  /** 案例库直接放进画布：没装载过的先装进工坊，再走同一条放入逻辑 */
+  placeGallery(id: string): boolean;
 }
 
 function currentCircuit(design: Design, view: string): Circuit {
@@ -510,6 +526,7 @@ export const useEditor = create<EditorState>((set, get) => {
       ? { label: "saved", savedRevision: 0, currentRevision: 0 }
       : { label: "unsaved", savedRevision: 0, currentRevision: 0 },
     pendingMeta: null,
+    solutionSeen: loadPeeked(),
     recovery: initialRecovery,
     recoverySaved: true,
 
@@ -1295,6 +1312,18 @@ export const useEditor = create<EditorState>((set, get) => {
       return result;
     },
 
+    loadSolution() {
+      const st = get();
+      const level = levelById(st.levelId ?? "");
+      if (!level) return false;
+      const sol = solutionDesign(level);
+      if (!sol) return false;
+      park("载入参考解：" + level.name);
+      replace(sol, "root");
+      set({ result: null, solutionSeen: markPeeked(level.id) });
+      return true;
+    },
+
     setAsm(source) {
       set({ asmSource: source });
     },
@@ -1387,10 +1416,30 @@ export const useEditor = create<EditorState>((set, get) => {
       const manifest = findComponent(st.workshop, id, version);
       if (!manifest) return false;
       if (st.view === manifest.id) return false; // 不能把自己放进自己的子电路里
-      if (!st.design.defs.some((d) => d.id === manifest.id)) {
-        // 当前设计里没有这枚子电路：先从工坊登记一份（深拷贝，避免共享引用）
+
+      /* 依赖闭包：这枚组件内部如果还嵌了别的子电路，那些 def 也必须一起进设计，
+         否则放上去就是一个「找不到 custom:xxx」的红叉。先深拷贝，避免共享引用。 */
+      const missing: CustomDef[] = [];
+      const seen = new Set<string>([manifest.id]);
+      const walk = (def: CustomDef) => {
+        for (const c of def.circuit.comps ?? []) {
+          if (!c.type.startsWith("custom:")) continue;
+          const depId = c.type.slice(7);
+          if (seen.has(depId)) continue;
+          seen.add(depId);
+          if (st.design.defs.some((d) => d.id === depId)) continue;
+          const dep = findComponent(st.workshop, depId);
+          if (!dep) continue;
+          missing.push(JSON.parse(JSON.stringify(dep.def)) as CustomDef);
+          walk(dep.def);
+        }
+      };
+      walk(manifest.def);
+
+      if (!st.design.defs.some((d) => d.id === manifest.id) || missing.length) {
         const def = JSON.parse(JSON.stringify(manifest.def)) as CustomDef;
-        set({ design: { ...st.design, defs: [...st.design.defs, def] } });
+        const add = st.design.defs.some((d) => d.id === manifest.id) ? [] : [def];
+        set({ design: { ...st.design, defs: [...st.design.defs, ...add, ...missing] } });
         after("引入组件", false);
       }
       const { camera, viewport } = get();
@@ -1398,6 +1447,29 @@ export const useEditor = create<EditorState>((set, get) => {
       const cy = viewport.h / (2 * GRID * camera.zoom) + camera.y;
       get().placeComp("custom:" + manifest.id, cx, cy);
       return true;
+    },
+
+    loadGallery(ids) {
+      const cur = get().workshop;
+      const draft: WorkshopState = { components: cur.components.map((c) => ({ ...c })) };
+      const targets = galleryManifests().filter((m) => !ids || ids.includes(m.id));
+      let added = 0;
+      for (const m of targets) {
+        // 已经有的不覆盖：用户可能把同名组件改成了自己的版本，不能被案例库冲掉
+        if (draft.components.some((c) => c.id === m.id)) continue;
+        draft.components.push(JSON.parse(JSON.stringify(m)) as ComponentManifest);
+        added++;
+      }
+      if (added) {
+        saveWorkshopLocal(draft);
+        set({ workshop: draft });
+      }
+      return added;
+    },
+
+    placeGallery(id) {
+      if (!findComponent(get().workshop, id)) get().loadGallery([id]);
+      return get().useWorkshopComponent(id);
     },
   };
 });

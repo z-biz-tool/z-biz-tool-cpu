@@ -3285,6 +3285,49 @@ ok:
   );
   check("GATE: 先修图自己接进运行时，不再是发布期装饰", /META_BY_ID\[levelId\]\?\.prerequisites/.test(codeOf("../src/challenges/prereq.ts")));
   check("GATE: 删掉「永远返回空 id」的死映射不再骗人", !/idForWorld|metaByLevelMap/.test(codeOf("../src/courses/publishMetadata.ts")));
+
+  /* ---------------------------------------------------------------- *
+   * PL：序章三关是真入口，不是文档里的一句话
+   *
+   * 引导弹窗的「从序章开始」直接 startLevel("prologue-light")。
+   * 只要 levelById 认不出序章，按钮就会静默无反应 —— 这类问题界面看不出来，
+   * 只能在这里钉住：查得到、照提示做一步能通关、没答案的关不许摆按钮。
+   * ---------------------------------------------------------------- */
+  {
+    const pv = await import("../src/challenges/prologue.ts");
+    const bd = await import("../src/core/build.ts");
+    const lvs = await import("../src/challenges/levels.ts");
+    const vl2 = await import("../src/challenges/verify.ts");
+    const stg = lvs.STORAGE_LEVELS;
+    const fast = lvs.FAST_LEVELS;
+
+    const missing = pv.PROLOGUE_LEVELS.filter((l) => byId(l.id)?.id !== l.id).map((l) => l.id);
+    check("PL: 序章三关在 levelById 里查得到（引导按钮不会静默无反应）", missing.length === 0, missing.join(","));
+
+    /* 按提示做「一步」：点灯关本来就通；断线关补一根线；时钟关把 D 接上 */
+    const fixes: Record<string, (d: any) => void> = {
+      "prologue-light": () => {},
+      "prologue-wire": (d) => d.root.wires.push(bd.wire("fix", ["in-S", "out"], ["out-L", "in"])),
+      "prologue-clock": (d) => d.root.wires.push(bd.wire("fix", ["in-D", "out"], ["ff", "d"])),
+    };
+    for (const l of pv.PROLOGUE_LEVELS) {
+      const d = lvs.levelDesign(l);
+      fixes[l.id]?.(d);
+      const r = vl2.runLevelTests(l, d);
+      check(`PL: 「${l.name}」照提示做一步就能通关`, r.pass, `${r.ok}/${r.total} ` + r.notes.join(" / "));
+    }
+
+    /* 反证：断线关不接就判不过 —— 否则「练手感」变成了「白送过关」 */
+    const wire0 = lvs.levelDesign(pv.PROLOGUE_LEVELS[1]);
+    check("PL: 断线关不接线时确实判不过", !vl2.runLevelTests(pv.PROLOGUE_LEVELS[1], wire0).pass);
+
+    check(
+      "PL: 没参考解的关不摆「看参考解」按钮",
+      !pv.PROLOGUE_LEVELS.some((l) => lvs.hasSolution(l.id)) && /hasSolution\(level\.id\)/.test(panel)
+    );
+    const noSol = [...LVS, ...stg, ...fast].filter((l) => !lvs.hasSolution(l.id)).map((l) => l.id);
+    check("PL: 57 关正式关卡每关都有参考解（答案索引不是空头支票）", noSol.length === 0, noSol.join(","));
+  }
 }
 
   /* ---------------------------------------------------------------- *

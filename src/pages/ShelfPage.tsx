@@ -9,6 +9,7 @@ import { DRAFT_KEY } from "../core/draft.ts";
 import { listSlots } from "../core/serialize.ts";
 import { MAX_POINTS } from "../core/recovery.ts";
 import { LEVEL_STASH, useEditor } from "../editor/store.ts";
+import GuideModal, { guideSeen } from "../components/GuideModal.tsx";
 
 /* ------------------------------------------------------------------ *
  * 书架主页：3 张书卡 + 动态背景 + 入场动画 + 3D 悬停 + 项目库
@@ -45,6 +46,8 @@ export default function ShelfPage() {
   const progress = useEditor((s) => s.progress);
   const setBook = useEditor((s) => s.setBook);
   const navigate = useNavigate();
+  /* EDU-01：第一次进来先给路线，之后靠书架上的按钮随时再打开 */
+  const [guideOpen, setGuideOpen] = useState(() => !guideSeen());
 
   const books: Book[] = useMemo(
     () => [
@@ -113,6 +116,9 @@ export default function ShelfPage() {
         </div>
         <div className="greeting">
           <span className="greeting-hi">{greeting()}，今天读哪一本？</span>
+          <button className="btn ghost small guide-btn" onClick={() => setGuideOpen(true)}>
+            ✦ 上手引导
+          </button>
         </div>
         <div className="total-pill">
           <Progress
@@ -149,6 +155,22 @@ export default function ShelfPage() {
         ))}
       </div>
 
+      {/* 发现入口：不讲一句「我们有 100 个案例」，别人不会点开工坊面板去找 */}
+      <button
+        className="btn ghost sand"
+        onClick={() => {
+          useEditor.getState().openSandbox();
+          useEditor.getState().setPanel("workshop");
+          navigate("/sandbox");
+        }}
+      >
+        <span className="sand-glyph">✦</span>
+        <span>
+          组件工坊 · 100 个可拆可跑的真实电路（431 个元件，含一台能跑完 1+2+3 就停机的迷你 CPU）
+        </span>
+        <span className="sand-arrow">→</span>
+      </button>
+
       <ProjectLibrary onRow={(e) => navigate(e.to)} />
 
       <footer className="shelf-page-foot">
@@ -161,6 +183,8 @@ export default function ShelfPage() {
           整盘替换（新建／切关／导入／读档）前都会自动留底进项目历史，最多 {MAX_POINTS} 份；「存档」是一个可覆盖的存档位
         </span>
       </footer>
+
+      <GuideModal open={guideOpen} onClose={() => setGuideOpen(false)} />
     </div>
   );
 }

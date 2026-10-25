@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   Alert,
+  App,
   Button,
   Card,
   Col,
@@ -10,7 +11,6 @@ import {
   Space,
   Statistic,
   Typography,
-  message,
 } from "antd";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
@@ -38,6 +38,10 @@ const formatSize = (b: number) => {
  * z-biz-tool-lead/doc/分发/updater-官方化指南.md。
  */
 export default function UpdaterGate({ delayMs = 5000 }: { delayMs?: number }) {
+  /* 走 context 版：静态 message.xxx 拿不到主题，深色界面里会闪一条白底提示。
+     这里刻意改叫 toast —— 既说清它是 context 拿到的，也让「别用静态方法」那条门禁
+     能真的只盯住静态调用。 */
+  const { message: toast } = App.useApp();
   const [update, setUpdate] = useState<Update | null>(null);
   const [phase, setPhase] = useState<"idle" | "downloading" | "done">("idle");
   const [received, setReceived] = useState(0);
@@ -89,10 +93,10 @@ export default function UpdaterGate({ delayMs = 5000 }: { delayMs?: number }) {
       setPhase("done");
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
-      message.error("更新下载失败: " + msg);
+      toast.error("更新下载失败: " + msg);
       setPhase("idle");
     }
-  }, [update]);
+  }, [update, toast]);
 
   const restart = useCallback(async () => {
     setRestarting(true);
@@ -100,10 +104,10 @@ export default function UpdaterGate({ delayMs = 5000 }: { delayMs?: number }) {
       await relaunch();
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
-      message.error("重启失败，请手动重启应用: " + msg);
+      toast.error("重启失败，请手动重启应用: " + msg);
       setRestarting(false);
     }
-  }, []);
+  }, [toast]);
 
   if (!update) return null;
 

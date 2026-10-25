@@ -59,6 +59,8 @@ const prologueWireTests: LevelTest[] = [
   { name: "S=1 时 L=1", inputs: { S: 1 }, steps: 1, outputs: { L: 1 } },
 ];
 
+/* 每条测试都从「设计初始状态」独立开跑，不承接上一条的 Q。
+   所以想把 Q 先置成 1，就得自己打一个上升沿 —— 不能指望上一条留下的值。 */
 const prologueClockTests: LevelTest[] = [
   { name: "CLK 保持 0，D 变化 Q 不变", inputs: { D: 1, CLK: 0 }, steps: 2, outputs: { Q: 0 } },
   {
@@ -69,8 +71,25 @@ const prologueClockTests: LevelTest[] = [
     ],
     outputs: { Q: 1 },
   },
-  { name: "下降沿 D 变 0，Q 仍 1", inputs: { D: 0, CLK: 0 }, steps: 2, outputs: { Q: 1 } },
-  { name: "再次上升沿 D=0 后 Q=0", inputs: { D: 0, CLK: 1 }, steps: 2, outputs: { Q: 0 } },
+  {
+    name: "置 1 之后把 D 拉回 0，只要时钟不动 Q 就还是 1",
+    phases: [
+      { inputs: { D: 1, CLK: 0 }, steps: 1 },
+      { inputs: { CLK: 1 }, steps: 2 },
+      { inputs: { D: 0, CLK: 0 }, steps: 2 },
+    ],
+    outputs: { Q: 1 },
+  },
+  {
+    name: "下一个上升沿才把 Q 拉回 0",
+    phases: [
+      { inputs: { D: 1, CLK: 0 }, steps: 1 },
+      { inputs: { CLK: 1 }, steps: 2 },
+      { inputs: { D: 0, CLK: 0 }, steps: 2 },
+      { inputs: { CLK: 1 }, steps: 2 },
+    ],
+    outputs: { Q: 0 },
+  },
 ];
 
 export const PROLOGUE_LEVELS: Level[] = [

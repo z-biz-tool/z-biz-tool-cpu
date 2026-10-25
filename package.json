@@ -16,6 +16,8 @@
     "typecheck": "tsc --noEmit",
     "test": "node --experimental-strip-types --test tests/*.test.ts",
     "verify": "node scripts/verify.ts",
+    "verify:gallery": "node scripts/verify-gallery.ts",
+    "docs:export": "node scripts/export-docs.ts",
     "format": "prettier --write \"src/**/*.{ts,tsx,css}\""
   },
   "dependencies": {

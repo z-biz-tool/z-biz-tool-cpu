@@ -1998,3 +1998,99 @@ input[type="range"]:focus-visible {
 }
 
 
+/* ------------------------------------------------------------------ *
+ * CASE-01：案例库（工坊内嵌的 100 个现成电路）
+ * ------------------------------------------------------------------ */
+
+.gallery-entry {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  border: 1px solid var(--edge);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+  background: linear-gradient(90deg, rgba(167, 139, 250, 0.12), transparent 70%), var(--panel-2);
+}
+
+.pack-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.pack-chip {
+  appearance: none;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--edge);
+  background: var(--panel-2);
+  color: var(--text);
+}
+.pack-chip:hover {
+  border-color: var(--accent);
+}
+.pack-chip.on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.example-detail .desc {
+  margin: 0 0 6px;
+  color: var(--text);
+}
+.example-detail .teach {
+  margin: 0;
+  color: var(--dim);
+  line-height: 1.7;
+  font-size: 12.5px;
+}
+
+.example-src {
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  max-height: 260px;
+  overflow: auto;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #cbd5e1;
+  background: #0a0c13;
+  border: 1px solid var(--edge);
+  border-radius: 8px;
+  white-space: pre;
+}
+
+/* EDU-01：新手引导 */
+.guide-btn {
+  margin-left: 10px;
+  vertical-align: middle;
+}
+.guide-body .desc {
+  margin: 0 0 8px;
+  color: var(--text);
+}
+.guide-body .teach {
+  margin: 0 0 8px;
+  color: var(--dim);
+  line-height: 1.75;
+  font-size: 12.5px;
+}
+.guide-body ol,
+.guide-body ul {
+  line-height: 1.9;
+}
+.guide-body code {
+  font-family: var(--mono);
+  background: var(--panel-2);
+  border: 1px solid var(--edge);
+  border-radius: 4px;
+  padding: 0 4px;
+  font-size: 12px;
+}

@@ -26,6 +26,16 @@ export interface ComponentManifest {
   createdAt: number;
   /** 升级来源：当 component 是升级版本时记录 */
   supersededBy?: number;
+  /**
+   * 案例库自带组件才有的元信息（用户封装为 undefined）。
+   * 放在这里而不是另立一张表：案例与用户组件共用同一套版本/接口/放入画布逻辑。
+   */
+  gallery?: {
+    pack: string;
+    tier: number;
+    why: string;
+    tags: string[];
+  };
 }
 
 export interface WorkshopState {

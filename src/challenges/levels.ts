@@ -5,6 +5,7 @@ import { OP, encode } from "../asm/isa.ts";
 import { assemble } from "../asm/assembler.ts";
 import { assemblesSample } from "../asm/samples.ts";
 import { SOLUTIONS } from "./solutions.ts";
+import { PROLOGUE_LEVELS } from "./prologue.ts";
 
 /* ------------------------------------------------------------------ *
  * 关卡：每一关给出骨架电路（输入/输出/预置元件）+ 测试用例
@@ -152,6 +153,11 @@ export function solutionDesign(level: Level): Design | undefined {
   const design = levelDesign(level);
   fn(design);
   return design;
+}
+
+/** 这一关有没有参考解。序章三关故意不给答案 —— 它们本来就只有一步操作 */
+export function hasSolution(levelId: string): boolean {
+  return !!SOLUTIONS[levelId];
 }
 
 export function parOf(design: Design): number {
@@ -2295,7 +2301,10 @@ export function levelById(id: string): Level | undefined {
   return (
     LEVELS.find((l) => l.id === id) ??
     STORAGE_LEVELS.find((l) => l.id === id) ??
-    FAST_LEVELS.find((l) => l.id === id)
+    FAST_LEVELS.find((l) => l.id === id) ??
+    /* 序章三关也算「能打开的关卡」：引导里的「从序章开始」直接 startLevel 进来，
+       不在这里认它，按钮就会静默无反应 */
+    PROLOGUE_LEVELS.find((l) => l.id === id)
   );
 }
 
