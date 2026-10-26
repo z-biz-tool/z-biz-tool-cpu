@@ -1,5 +1,5 @@
 import { Alert, Button, Input, Radio, Space, Tag } from "antd";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Simulator } from "../../core/sim.ts";
 import { adapterForReference, validateUserAdapter } from "../../cpu/debug.ts";
 import type { CpuDebugAdapter, SignalRef } from "../../cpu/debug.ts";
@@ -15,10 +15,10 @@ import { ISA_VERSION } from "../../asm/isa.ts";
  * ------------------------------------------------------------------ */
 
 export interface AdapterWizardProps {
-  /** Simulator 实例用于校验绑定。允许组件不消费该 prop，由调用方忽略 */
+  /** 当前画布设计的 Simulator，用于校验绑定能否解析到真实信号 */
   sim?: Simulator;
-  /** 用户绑定成功时回调，存进项目 */
-  onApply: (adapter: CpuDebugAdapter) => void;
+  /** 校验通过时回调；目前没有写入项目的通道，调用方可忽略 */
+  onApply?: (adapter: CpuDebugAdapter) => void;
   /** 当前已绑定（来自项目），回填到表单 */
   current?: CpuDebugAdapter | null;
 }
@@ -68,27 +68,31 @@ export default function AdapterWizard({ sim, onApply, current }: AdapterWizardPr
   };
 
   const [errors, setErrors] = useState<string[]>([]);
-  const validate = () => {
-    if (mode === "reference") return setErrors([]);
-    if (!sim) return setErrors(["缺少 Simulator：无法校验绑定"]);
+  /** 上次校验结论；改动任一字段就作废，避免拿着旧结论当新结论 */
+  const [pass, setPass] = useState<string | null>(null);
+  useEffect(() => {
+    setPass(null);
+    setErrors([]);
+  }, [mode, pc, pcPin, regsText, regsPin, flagZ, flagZPin, flagC, flagCPin, flagN, flagNPin, halted, haltedPin, memPath]);
+
+  const apply = () => {
+    setPass(null);
+    if (mode === "reference") return;
+    if (!sim) return setErrors(["缺少当前设计的仿真器：无法校验绑定"]);
     const a = buildAdapter();
     if (!a) return setErrors(["绑定未填完"]);
-    setErrors(validateUserAdapter(a, sim));
-  };
-  const apply = () => {
-    if (mode === "reference") return;
-    if (!sim) return;
-    const a = buildAdapter();
-    if (!a) return;
     const errs = validateUserAdapter(a, sim);
     setErrors(errs);
-    if (!errs.length) onApply(a);
+    if (errs.length) return;
+    setPass("校验通过：PC、R0…R7、停机信号都能在当前画布的设计里解析到。");
+    onApply?.(a);
   };
 
   return (
     <div className="adapter-wizard">
       <div className="panel-note">
-        调试器要查看架构状态（PC / 寄存器 / 标志 / 停机），需要明确指出画布上的哪些信号代表哪个对象。下面两种方式任选其一。
+        调试器要查看架构状态（PC / 寄存器 / 标志 / 停机），需要明确指出画布上的哪些信号代表哪个对象。
+        用户向导只校验这些信号能否在当前设计里解析到，不会写入项目；参考 CPU 运行时使用内置绑定。
       </div>
 
       <Radio.Group value={mode} onChange={(e) => setMode(e.target.value as "reference" | "user")} style={{ marginBottom: 12 }}>
@@ -124,6 +128,10 @@ export default function AdapterWizard({ sim, onApply, current }: AdapterWizardPr
         </>
       )}
 
+      {pass && (
+        <Alert type="success" showIcon style={{ marginTop: 12 }} title={pass} description="这是校验结论，没有写进项目文件；改动任一字段后会重新校验。" />
+      )}
+
       {errors.length > 0 && (
         <Alert
           type="error"
@@ -135,9 +143,8 @@ export default function AdapterWizard({ sim, onApply, current }: AdapterWizardPr
       )}
 
       <Space style={{ marginTop: 12 }}>
-        <Button size="small" onClick={validate}>校验</Button>
         <Button size="small" type="primary" onClick={apply} disabled={mode === "reference"}>
-          保存绑定
+          校验绑定
         </Button>
         <Tag color="geekblue">ISA {ISA_VERSION}</Tag>
       </Space>

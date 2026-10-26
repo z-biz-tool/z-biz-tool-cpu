@@ -1,4 +1,4 @@
-import { Alert, Button, Empty, Select, Table, Tag, Tooltip } from "antd";
+import { Alert, App, Button, Empty, Select, Table, Tag, Tooltip } from "antd";
 import { useMemo } from "react";
 import { SAMPLES } from "../../asm/samples.ts";
 import { PORT_OUT } from "../../asm/isa.ts";
@@ -11,6 +11,7 @@ import { useEditor } from "../store.ts";
 const MEM_TYPES = new Set(["ram", "rom"]);
 
 export default function AsmPanel() {
+  const { message: toast } = App.useApp();
   const source = useEditor((s) => s.asmSource);
   const setAsm = useEditor((s) => s.setAsm);
   const target = useEditor((s) => s.asmTarget);
@@ -28,6 +29,14 @@ export default function AsmPanel() {
         .map((c) => ({ value: c.id, label: c.name || `${c.type} · ${c.id}` })),
     [circuit, tick]
   );
+  /* 目标元件可能被删掉，也可能因为切到子电路而不在本视图里；这种时候按钮不能装作还能装 */
+  const targetMissing = !!target && !mems.some((m) => m.value === target);
+  const targetLabel = mems.find((m) => m.value === target)?.label ?? target;
+  const loadTip = !target
+    ? "先选一个存储元件"
+    : targetMissing
+      ? "选中的存储元件不在当前视图，请重新选择"
+      : "把机器码按地址写进选中的存储元件";
 
   return (
     <div className="panel-body">
@@ -80,14 +89,19 @@ export default function AsmPanel() {
           onChange={setTarget}
           notFoundContent={mems.length ? undefined : "画布上没有 RAM/ROM"}
         />
-        <Tooltip title={target ? "把机器码按地址写进选中的存储元件" : "先选一个存储元件"}>
+        <Tooltip title={loadTip}>
           <Button
             size="small"
-            disabled={!target}
+            disabled={!target || targetMissing}
             onClick={() => {
-              if (!useEditor.getState().loadProgramToTarget()) {
-                useEditor.getState().assembleNow();
+              const st = useEditor.getState();
+              if (!st.loadProgramToTarget()) {
+                st.assembleNow();
+                toast.warning("汇编没通过，机器码没有写入存储元件");
+                return;
               }
+              /* 条数取写入后的状态：用户可能改了源码还没失焦就点装载 */
+              toast.success(`已把 ${useEditor.getState().asmWords.length} 条指令写入「${targetLabel}」`);
             }}
           >
             装载
@@ -95,6 +109,16 @@ export default function AsmPanel() {
         </Tooltip>
         <Tag color="blue">{words.length} 条指令</Tag>
       </div>
+
+      {targetMissing && (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginBottom: 8 }}
+          title="选中的存储元件不在当前视图"
+          description={`之前选的 ${target} 可能已被删除，或者你切到了别的子电路；装载前请重新选择目标。`}
+        />
+      )}
 
       {!!errors.length && <Alert type="error" showIcon title="汇编错误" description={<ul className="asm-errors">{errors.map((e) => <li key={e}>{e}</li>)}</ul>} />}
 

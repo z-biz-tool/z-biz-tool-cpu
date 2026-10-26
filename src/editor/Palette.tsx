@@ -1,4 +1,4 @@
-import { App, Empty, Input, Modal, Tooltip } from "antd";
+import { App, Empty, Input, Modal, Popconfirm, Tooltip } from "antd";
 import { useMemo, useRef, useState } from "react";
 import { CATEGORY_LABEL, paletteDefs } from "../core/registry.ts";
 import type { CompCategory, CompDef, CustomDef } from "../core/types.ts";
@@ -112,7 +112,14 @@ export default function Palette() {
   };
 
   const onImport = async (file: File) => {
-    const res = useEditor.getState().importText(await file.text());
+    /* 读文件本身也会失败（权限、文件被移走、编码坏掉），别让它变成一次无声的点击 */
+    let res: { ok: boolean; report: string[]; apply: () => void };
+    try {
+      res = useEditor.getState().importText(await file.text());
+    } catch (e) {
+      notify("error", `「${file.name}」没能载入`, [`读取或解析文件时出错：${(e as Error).message}`], true);
+      return;
+    }
     if (!res.ok) {
       notify("error", `「${file.name}」没能载入`, res.report, true);
       return;
@@ -125,7 +132,13 @@ export default function Palette() {
 
   return (
     <div className="palette">
-      <input className="search" placeholder="搜索元件…" value={q} onChange={(e) => setQ(e.target.value)} />
+      <input
+        className="search"
+        placeholder="搜索元件…"
+        aria-label="搜索元件"
+        value={q}
+        onChange={(e) => setQ(e.target.value)}
+      />
       <div className="palette-scroll">
         {groups.map(({ category, defs: list, locked }) => {
           const key = category;
@@ -134,6 +147,7 @@ export default function Palette() {
             <section key={key} className="pal-group">
               <button
                 className="pal-head"
+                aria-expanded={shown}
                 onClick={() => setOpen((o) => ({ ...o, [key]: !shown }))}
               >
                 <span className="caret">{shown ? "▾" : "▸"}</span>
@@ -185,7 +199,11 @@ export default function Palette() {
         })}
 
         <section className="pal-group">
-          <button className="pal-head" onClick={() => setOpen((o) => ({ ...o, custom: !(o.custom !== false) }))}>
+          <button
+            className="pal-head"
+            aria-expanded={open.custom !== false}
+            onClick={() => setOpen((o) => ({ ...o, custom: !(o.custom !== false) }))}
+          >
             <span className="caret">{open.custom !== false ? "▾" : "▸"}</span>
             子电路
             <em>{defs.length}</em>
@@ -232,19 +250,34 @@ export default function Palette() {
                         <span className="pal-cost">{defCost(design, d.id)}</span>
                       </button>
                     )}
-                    <button className="mini" onClick={() => enterView(d.id)} title="进入子电路编辑">
+                    <button
+                      className="mini"
+                      onClick={() => enterView(d.id)}
+                      title="进入子电路编辑"
+                      aria-label={`进入子电路「${d.name}」`}
+                    >
                       {view === d.id ? "●" : "✎"}
                     </button>
                     <button
                       className="mini"
                       onClick={() => setRenaming({ id: d.id, draft: d.name })}
                       title="重命名（就地输入，回车确认、Esc 取消）"
+                      aria-label={`重命名子电路「${d.name}」`}
                     >
                       A
                     </button>
-                    <button className="mini danger" onClick={() => deleteDef(d.id)} title="删除子电路">
-                      ✕
-                    </button>
+                    <Popconfirm
+                      title={`删除子电路「${d.name}」？`}
+                      description="所有用到它的实例和连线会一起移除；误删可用撤销（⌘Z）找回。"
+                      okText="删除"
+                      cancelText="取消"
+                      okButtonProps={{ danger: true }}
+                      onConfirm={() => deleteDef(d.id)}
+                    >
+                      <button className="mini danger" title="删除子电路" aria-label={`删除子电路「${d.name}」`}>
+                        ✕
+                      </button>
+                    </Popconfirm>
                   </div>
                 );
               })}
@@ -337,9 +370,18 @@ export default function Palette() {
                 >
                   恢复
                 </button>
-                <button className="mini danger" title="删掉这条" onClick={() => forgetRecovery(p.id)}>
-                  ✕
-                </button>
+                <Popconfirm
+                  title="删掉这份恢复点？"
+                  description={`「${p.name}」删掉之后就回不去了。`}
+                  okText="删除"
+                  cancelText="取消"
+                  okButtonProps={{ danger: true }}
+                  onConfirm={() => forgetRecovery(p.id)}
+                >
+                  <button className="mini danger" title="删掉这条" aria-label={`删掉恢复点「${p.name}」`}>
+                    ✕
+                  </button>
+                </Popconfirm>
               </li>
             ))}
           </ul>

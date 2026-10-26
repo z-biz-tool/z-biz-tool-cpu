@@ -202,8 +202,9 @@ export function loadWorkshopLocal(): WorkshopState {
 export function saveWorkshopLocal(state: WorkshopState): void {
   try {
     localStorage.setItem(LS_KEY, exportWorkshop(state));
-  } catch {
-    /* 容量不足时静默：导出备份仍是兜底通道 */
+  } catch (e) {
+    /* 容量不足时静默降级：导出备份仍是兜底通道，但要在控制台留下原因 */
+    console.warn("[workshop] 工坊索引没写进本地存储（导出备份仍可用）:", e);
   }
 }
 

@@ -68,6 +68,8 @@ function ctrlFields(ctrl: number): { name: string; desc: string; value: number }
 
 export default function CpuPanel() {
   const source = useEditor((s) => s.asmSource);
+  /** 用户把向导里的信号指向自己画布上的元件，所以校验必须用当前设计的仿真器，而不是参考机 */
+  const designSim = useEditor((s) => s.sim);
   const speed = useEditor((s) => s.speed);
   const [run, setRun] = useState<CpuRun | null>(null);
   const [errors, setErrors] = useState<string[]>([]);
@@ -272,11 +274,7 @@ export default function CpuPanel() {
 
       {showWizard && (
         <div style={{ marginTop: 12, padding: 8, background: "rgba(167,139,250,0.08)", borderRadius: 6 }}>
-          <AdapterWizard
-            sim={run ? run.sim : undefined}
-            onApply={(a) => console.log("[adapter] saved", a.id)}
-            current={null}
-          />
+          <AdapterWizard sim={designSim} />
         </div>
       )}
 

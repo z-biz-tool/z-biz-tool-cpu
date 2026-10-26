@@ -38,17 +38,22 @@ export default function Toolbar() {
     <header className="toolbar">
       <div className="tb-group">
         <Tooltip title="运行 / 暂停（空格）">
-          <button className={"btn big" + (running ? " active" : "")} onClick={() => st().toggleRun()}>
+          <button
+            className={"btn big" + (running ? " active" : "")}
+            aria-label={running ? "暂停仿真（空格）" : "运行仿真（空格）"}
+            aria-pressed={running}
+            onClick={() => st().toggleRun()}
+          >
             {running ? "⏸" : "▶"}
           </button>
         </Tooltip>
         <Tooltip title="单步一时钟周期（→）">
-          <button className="btn big" onClick={() => st().stepOnce()}>
+          <button className="btn big" aria-label="单步一个时钟周期（→）" onClick={() => st().stepOnce()}>
             ⏭
           </button>
         </Tooltip>
         <Tooltip title="复位仿真状态">
-          <button className="btn big" onClick={() => st().resetSim()}>
+          <button className="btn big" aria-label="复位仿真状态" onClick={() => st().resetSim()}>
             ⟲
           </button>
         </Tooltip>
@@ -58,6 +63,8 @@ export default function Toolbar() {
           min={1}
           max={60}
           value={Math.min(60, speed)}
+          aria-label="仿真速度（赫兹）"
+          aria-valuetext={`${speed} 赫兹`}
           onChange={(e) => st().setSpeed(Number(e.target.value))}
         />
         <span className="mono">{speed} Hz</span>

@@ -136,11 +136,20 @@ input[type="range"]:focus-visible {
 .rail .ant-tabs {
   flex: 1;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
+/* antd 6 的层级是 .ant-tabs-body-holder > .ant-tabs-body（5.x 是 .ant-tabs-content-holder）；
+   真正被 flex 约束的是 holder，必须让它滚动，否则 body 连同内容把整页撑高。 */
+.rail .ant-tabs-body-holder,
+.rail .ant-tabs-body,
 .rail .ant-tabs-content-holder {
+  flex: 1 1 auto;
+  min-height: 0;
   overflow: auto;
 }
 .rail .ant-tabs-nav {
+  flex: none;
   margin: 0;
 }
 
@@ -161,13 +170,19 @@ input[type="range"]:focus-visible {
   display: flex;
   align-items: center;
   gap: 6px;
+  /* 各组按内容占位，别被 flex 压缩到互相叠住 */
+  flex: none;
+  min-width: 0;
 }
 .tb-group.grow {
+  flex: 1 1 auto;
   justify-content: flex-start;
+  overflow: hidden;
 }
 .tb-group.stats {
   gap: 12px;
   margin-left: auto;
+  flex-wrap: nowrap;
 }
 .stat {
   color: var(--dim);
@@ -217,6 +232,21 @@ input[type="range"]:focus-visible {
   accent-color: var(--accent);
 }
 
+/* 900×600 这类窄窗：顶栏分两行，别让设计名被压成一个字、按钮互相压住 */
+@media (max-width: 1080px) {
+  .toolbar {
+    height: auto;
+    min-height: 46px;
+    flex-wrap: wrap;
+    row-gap: 4px;
+    padding: 6px 8px;
+  }
+  .tb-group.stats {
+    margin-left: 0;
+    flex-wrap: wrap;
+  }
+}
+
 /* 原生按钮：工具条、面板里大量复用 */
 .btn {
   appearance: none;
@@ -228,6 +258,7 @@ input[type="range"]:focus-visible {
   font-size: 12px;
   line-height: 18px;
   cursor: pointer;
+  white-space: nowrap;
   transition: background 0.12s, border-color 0.12s, color 0.12s;
 }
 .btn:hover:not(:disabled) {

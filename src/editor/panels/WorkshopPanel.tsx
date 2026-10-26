@@ -36,7 +36,7 @@ export default function WorkshopPanel() {
   const setPanel = useEditor((s) => s.setPanel);
   const openPackageMeta = useEditor((s) => s.openPackageMeta);
   const [diffId, setDiffId] = useState<string | null>(null);
-  const [notice, setNotice] = useState<{ kind: "success" | "warning"; text: string } | null>(null);
+  const [notice, setNotice] = useState<{ kind: "success" | "warning" | "error"; text: string } | null>(null);
   const [galleryOpen, setGalleryOpen] = useState(false);
   const [detailId, setDetailId] = useState<string | null>(null);
   const [q, setQ] = useState("");
@@ -129,17 +129,29 @@ export default function WorkshopPanel() {
           showUploadList={false}
           beforeUpload={(file) => {
             const reader = new FileReader();
-            reader.onload = () => {
-              const draft = { components: state.components.map((c) => ({ ...c })) };
-              const r = importWorkshop(draft, String(reader.result ?? ""));
-              replaceWorkshop(draft);
+            reader.onerror = () =>
               setNotice({
-                kind: r.failed ? "warning" : "success",
-                text:
-                  r.added || r.failed
-                    ? `导入完成：新增 ${r.added} 个版本${r.failed ? `，${r.failed} 项格式不符被跳过` : ""}`
-                    : "导入完成：备份里的组件本来就都在工坊里",
+                kind: "error",
+                text: `读不出「${file.name}」：${reader.error?.message ?? "文件读取失败"}（工坊没有改动）`,
               });
+            reader.onload = () => {
+              try {
+                const draft = { components: state.components.map((c) => ({ ...c })) };
+                const r = importWorkshop(draft, String(reader.result ?? ""));
+                replaceWorkshop(draft);
+                setNotice({
+                  kind: r.failed ? "warning" : "success",
+                  text:
+                    r.added || r.failed
+                      ? `导入完成：新增 ${r.added} 个版本${r.failed ? `，${r.failed} 项格式不符被跳过` : ""}`
+                      : "导入完成：备份里的组件本来就都在工坊里",
+                });
+              } catch (e) {
+                setNotice({
+                  kind: "error",
+                  text: `「${file.name}」不是可识别的工坊备份：${(e as Error).message}（工坊没有改动）`,
+                });
+              }
             };
             reader.readAsText(file);
             return false;

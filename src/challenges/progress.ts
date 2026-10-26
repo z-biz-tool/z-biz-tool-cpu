@@ -77,8 +77,9 @@ export function loadProgress(): Progress {
 export function saveProgress(p: Progress) {
   try {
     localStorage.setItem(KEY, JSON.stringify(p));
-  } catch {
-    /* 隐私模式下忽略 */
+  } catch (e) {
+    /* 隐私模式 / 配额满：本关结果只在内存里生效，控制台留下原因 */
+    console.warn("[progress] 关卡进度没写进本地存储（本次会话内仍有效）:", e);
   }
 }
 
