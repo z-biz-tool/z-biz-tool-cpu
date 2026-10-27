@@ -17,7 +17,8 @@ const KEY = "cpu-guide-seen-v1";
 export function guideSeen(): boolean {
   try {
     return localStorage.getItem(KEY) === "1";
-  } catch {
+  } catch (e) {
+    console.warn("[cpu] 读取引导标记失败，本次不再弹引导:", e);
     return true;
   }
 }
@@ -25,8 +26,9 @@ export function guideSeen(): boolean {
 export function markGuideSeen(): void {
   try {
     localStorage.setItem(KEY, "1");
-  } catch {
+  } catch (e) {
     /* 无所谓：下次再弹一次而已 */
+    console.warn("[cpu] 记录引导已读失败，下次可能再弹一次:", e);
   }
 }
 

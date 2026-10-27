@@ -69,7 +69,8 @@ export function loadProgress(): Progress {
       badges: Array.isArray(obj.badges) ? obj.badges.filter((b) => BADGE_MAP.has(String(b))).map(String) : [],
       speed: Math.min(240, Math.max(1, Number(obj.speed) || base.speed)),
     };
-  } catch {
+  } catch (e) {
+    console.warn("[progress] 进度文件解析失败，按默认进度继续:", e);
     return base;
   }
 }

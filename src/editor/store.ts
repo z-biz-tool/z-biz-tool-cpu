@@ -308,8 +308,9 @@ function readUiPrefs(): { entry?: EntryIntent; home?: string | null } {
     const p = JSON.parse(raw) as { v?: number; entry?: EntryIntent; home?: string | null };
     if (p?.v !== UI_PREFS_V) return {};
     return p;
-  } catch {
+  } catch (e) {
     /* 读不动只是下次开机少一个默认值，不该把应用卡住 */
+    console.warn("[cpu] 读取界面偏好失败，本次用默认值:", e);
     return {};
   }
 }
@@ -317,8 +318,9 @@ function readUiPrefs(): { entry?: EntryIntent; home?: string | null } {
 function writeUiPrefs(entry: EntryIntent, home: string | null) {
   try {
     window.localStorage.setItem(UI_PREFS_KEY, JSON.stringify({ v: UI_PREFS_V, entry, home }));
-  } catch {
+  } catch (e) {
     /* 隐私模式 / 配额满：本次会话的意图仍在内存里，只是下次开机要由 URL 重新表态 */
+    console.warn("[cpu] 写入界面偏好失败，本次仍按内存里的意图:", e);
   }
 }
 
