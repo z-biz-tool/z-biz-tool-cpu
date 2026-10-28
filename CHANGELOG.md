@@ -2,6 +2,14 @@
 
 z-biz-tool-cpu 版本变更记录。格式遵循 [Conventional Commits](https://www.conventionalcommits.org/)。
 
+## [0.2.1] - 2026-10-29
+
+更新通道修复版（无功能变更）。
+
+### Fixes
+
+- 更新通道 CI 两处修复：片段目录被 `upload-artifact@v4` 默认隐藏跳过（latest.json 从未成功推出去）；latest.json 下载链接因双 macOS 包被 tauri-action 重命名而 404 —— 现回查 release 资产按「扩展名+架构词」取真实名，并远端/本地签名逐字节比对
+
 ## [Unreleased]
 
 主题：**降低上手门槛 + 用 100 个可跑案例证明这套内核不是玩具**。新增内容全部可自检，不靠文案撑场面。
