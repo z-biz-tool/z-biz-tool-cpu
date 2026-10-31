@@ -1,0 +1,15 @@
+{
+  "id": "cpu",
+  "displayName": "数字电路与 CPU 构建沙盒",
+  "description": "从逻辑门到可运行汇编；课程化关卡（CPU 书 31 关 / 存储书 18 关 / 优化书 8 关）",
+  "acceptsDeepLink": true,
+  "actions": [
+    "open"
+  ],
+  "keywords": [
+    "数字电路",
+    "CPU",
+    "汇编",
+    "课程"
+  ]
+}
