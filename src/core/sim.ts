@@ -1,3 +1,4 @@
+import { Fnv1a32 } from "./hash.ts";
 import { buildNetlist, pinWidthOf, type Netlist, type SimComp, type SimNet } from "./netlist.ts";
 import { parseWordToken } from "./registry.ts";
 import type { Circuit, Design, EvalCtx, PinRef } from "./types.ts";
@@ -591,24 +592,21 @@ export class Simulator {
 
   /** IMP-04: 取所有网络值与已命名器件状态哈希，用于检测周期 */
   hashState(): number {
-    let h = 2166136261 >>> 0;
+    const h = new Fnv1a32();
     const nets = this.nl.nets;
     for (let i = 0; i < nets.length; i++) {
-      const v = nets[i].value | 0;
-      h ^= v;
-      h = Math.imul(h, 16777619) >>> 0;
+      h.mix(nets[i].value | 0);
     }
     for (const c of this.nl.comps) {
       if (c.boundary) continue;
       for (const k of Object.keys(c.state)) {
         const v = c.state[k];
         if (typeof v === "number") {
-          h ^= v + k.charCodeAt(0);
-          h = Math.imul(h, 16777619) >>> 0;
+          h.mix(v + k.charCodeAt(0));
         }
       }
     }
-    return h >>> 0;
+    return h.digest();
   }
 
   private clkValue(ci: number): number {
@@ -632,13 +630,18 @@ export class Simulator {
   }
 
   /** 手动设置输入开关 / 按钮 / 手动时钟源 */
-  setInput(compId: string, value: number) {
+  /**
+   * 设置输入元件的值。
+   * settle=false 时只改状态不结算 —— 同一拍里多个输入要"同时变"时用：
+   * 边设边结算会把中间状态锁存进触发器（D 先变、LOAD 后关，就等于锁了旧 LOAD）。
+   */
+  setInput(compId: string, value: number, settle = true) {
     const ci = this.indexOf(compId);
     if (ci < 0) return;
     const comp = this.nl.comps[ci];
     if (comp.def.type === "clock") comp.state.hi = value ? 1 : 0;
     else comp.state.v = mask(value, Math.max(1, comp.bits));
-    this.settle();
+    if (settle) this.settle();
   }
 
   /** 写入 RAM/ROM 内容：同时落到 params.data，使程序随设计一起保存 */

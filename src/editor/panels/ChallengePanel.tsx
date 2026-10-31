@@ -1,5 +1,5 @@
 import { Button, Modal, Popconfirm, Progress, Tag, Tooltip } from "antd";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   FAST_LEVELS,
   LEVELS,
@@ -13,6 +13,7 @@ import { PROLOGUE_LEVELS } from "../../challenges/prologue.ts";
 import { catchupLevels, missingPrereqs } from "../../challenges/prereq.ts";
 import { BADGES, passed, scoreOf, tierDone } from "../../challenges/progress.ts";
 import type { Progress as ProgressState, Badge } from "../../challenges/progress.ts";
+import type { LevelResult } from "../../challenges/verify.ts";
 import { settleState } from "../../core/sim.ts";
 import { sortDiags } from "../../core/netlist.ts";
 import { designCost, useEditor } from "../store.ts";
@@ -31,6 +32,15 @@ interface GapAsk {
 
 const levelName = (id: string) => levelById(id)?.name ?? id;
 
+/** 按书内顺序找当前关的下一关；已是本本最后一关则返回 undefined */
+function nextLevelOf(id: string) {
+  for (const list of [PROLOGUE_LEVELS, LEVELS, STORAGE_LEVELS, FAST_LEVELS]) {
+    const i = list.findIndex((l) => l.id === id);
+    if (i >= 0) return i + 1 < list.length ? list[i + 1] : undefined;
+  }
+  return undefined;
+}
+
 export default function ChallengePanel() {
   const levelId = useEditor((s) => s.levelId);
   const progress = useEditor((s) => s.progress);
@@ -46,6 +56,17 @@ export default function ChallengePanel() {
   const [gapAsk, setGapAsk] = useState<GapAsk | null>(null);
   /** doc 02 §5.2：振荡与预算用尽必须说不同的话 */
   const settle = result ? settleState(result.settleOutcome) : null;
+  /** 通关弹框：只在「这次判题新达成通关」时弹——判题前进度里已有通过记录的不重复弹 */
+  const prevProgress = useRef<ProgressState>(progress);
+  const [passModal, setPassModal] = useState<LevelResult | null>(null);
+  useEffect(() => {
+    const before = prevProgress.current;
+    prevProgress.current = progress;
+    if (result?.pass && before.done[result.levelId]?.pass !== true) {
+      setPassModal(result);
+    }
+  }, [result, progress]);
+  const nextLevel = passModal ? nextLevelOf(passModal.levelId) : undefined;
 
   const openLevel = (id: string, p: ProgressState) => {
     const missing = missingPrereqs(p, id);
@@ -314,6 +335,39 @@ export default function ChallengePanel() {
             </div>
           )}
         </>
+      )}
+      {passModal && (
+        <Modal
+          open
+          title={`通关 · ${levelName(passModal.levelId)}`}
+          onCancel={() => setPassModal(null)}
+          footer={[
+            <Button key="stay" type="text" onClick={() => setPassModal(null)}>
+              留在本关
+            </Button>,
+            nextLevel && (
+              <Button
+                key="next"
+                type="primary"
+                onClick={() => {
+                  openLevel(nextLevel.id, progress);
+                  setPassModal(null);
+                }}
+              >
+                下一关 · {nextLevel.name}
+              </Button>
+            ),
+          ].filter(Boolean)}
+        >
+          <p className="desc">
+            {passModal.ok}/{passModal.total} 个用例全部通过 · 花费 {passModal.cost}
+            {(() => {
+              const par = parCost(levelById(passModal.levelId)!);
+              return par !== undefined ? `（基准 ${par})` : "";
+            })()}
+          </p>
+          {!nextLevel && <p className="teach">这是本书的最后一关 —— 整本读完，去下一本看看。</p>}
+        </Modal>
       )}
       {gapAsk && (
         <Modal

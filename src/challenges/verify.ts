@@ -4,6 +4,7 @@ import { Simulator, worstSettle, type SettleOutcome } from "../core/sim.ts";
 import type { SimError } from "../core/netlist.ts";
 import type { CompInstance, Design } from "../core/types.ts";
 import { mask } from "../core/types.ts";
+import type { TestbenchCase } from "../courses/manifest.ts";
 import type { Level, LevelTest, TestPhase, Value } from "./levels.ts";
 
 /* ------------------------------------------------------------------ *
@@ -268,4 +269,199 @@ export function runLevelTests(level: Level, design: Design): LevelResult {
 
 function addOutcome(outcomes: TestOutcome[], name: string, pass: boolean, detail: string) {
   outcomes.push({ name, pass, checks: [{ label: name, pass, detail }] });
+}
+
+/* ------------------------------------------------------------------ *
+ * 发布态用例的执行（courses/manifest.ts 的 TestbenchCase）
+ *
+ * 发布内容包里的用例是纯 JSON，没有可执行骨架，只能落到同一个仿真器上判。
+ * 此前 courses/judging.ts 的 runCase 只占结构、恒返回通过 —— 那种"判题"最坏：
+ * 看着在判，其实什么都没跑，判出来的"全过"是假的。
+ * ------------------------------------------------------------------ */
+
+/** 发布态用例的一处判定，额外带上期望/实际，供上层归类失败原因 */
+export interface PublishedCheck extends Check {
+  expected?: unknown;
+  actual?: unknown;
+}
+
+export interface TestbenchOutcome {
+  caseId: string;
+  pass: boolean;
+  checks: PublishedCheck[];
+  elapsedTicks: number;
+  /** 组合逻辑未收敛 */
+  unsettled: boolean;
+}
+
+/** 按名字定位元件：大小写不敏感，兼容 in-/out- 前缀（发布用例里写的是短名） */
+function findTarget(design: Design, target: string): CompInstance | undefined {
+  const t = target.toLowerCase();
+  return design.root.comps.find(
+    (c) =>
+      c.id.toLowerCase() === t ||
+      (c.name ?? "").toLowerCase() === t ||
+      c.id.toLowerCase() === "in-" + t ||
+      c.id.toLowerCase() === "out-" + t
+  );
+}
+
+/** 终端（print）元件打印出去的值序列 */
+function printedValues(sim: Simulator, compId: string): number[] {
+  const out: number[] = [];
+  for (const l of sim.logs) {
+    if (l.comp !== compId || l.level !== "info") continue;
+    const v = num(l.msg);
+    if (Number.isFinite(v)) out.push(v);
+  }
+  return out;
+}
+
+/** 去掉连续重复的采样（元件保持旧值时不算新的一次输出） */
+function compress(values: number[]): number[] {
+  const out: number[] = [];
+  for (const v of values) if (out.length === 0 || out[out.length - 1] !== v) out.push(v);
+  return out;
+}
+
+export function runTestbenchCase(design: Design, c: TestbenchCase): TestbenchOutcome {
+  const checks: PublishedCheck[] = [];
+  const sim = new Simulator(design, design.root);
+  const byTick = new Map<number, TestbenchCase["inputs"]>();
+  for (const ev of c.inputs ?? []) {
+    const list = byTick.get(ev.tick) ?? [];
+    list.push(ev);
+    byTick.set(ev.tick, list);
+  }
+  const seqTargets = (c.assertions ?? [])
+    .filter((a) => a.kind === "outputSequence")
+    .map((a) => a.target);
+  const samples = new Map<string, number[]>();
+
+  const maxTicks = Math.max(1, c.maxTicks ?? 16);
+  let ran = 0;
+  for (let tick = 0; tick < maxTicks; tick++) {
+    // 同一拍的输入要同时生效：先全部静默写入，再跑这一拍
+    for (const ev of byTick.get(tick) ?? []) {
+      const inst = findTarget(design, ev.target);
+      if (!inst) {
+        checks.push({ label: `输入 ${ev.target}`, pass: false, detail: `找不到名为 ${ev.target} 的输入元件` });
+        continue;
+      }
+      sim.setInput(inst.id, num(ev.value), false);
+    }
+    if (!sim.run(1)) {
+      checks.push({ label: "仿真", pass: false, detail: "仿真在阻断性错误下中止" });
+      break;
+    }
+    ran = tick + 1;
+    for (const t of seqTargets) {
+      const inst = findTarget(design, t);
+      if (!inst) continue;
+      const got = readComp(sim, inst);
+      if (!got) continue;
+      const arr = samples.get(t) ?? [];
+      arr.push(got.value);
+      samples.set(t, arr);
+    }
+  }
+
+  for (const a of c.assertions ?? []) {
+    switch (a.kind) {
+      case "signalEquals": {
+        const inst = findTarget(design, a.target);
+        if (!inst) {
+          checks.push({ label: `输出 ${a.target}`, pass: false, detail: `找不到名为 ${a.target} 的元件` });
+          break;
+        }
+        const got = readComp(sim, inst);
+        if (!got) {
+          checks.push({ label: `输出 ${a.target}`, pass: false, detail: `${a.target} 没有可观测的输出脚` });
+          break;
+        }
+        const want = mask(num(a.equals), got.width);
+        const actual = mask(got.value, got.width);
+        checks.push({
+          label: `输出 ${a.target}`,
+          pass: actual === want,
+          detail: `期望 ${fmt(want, got.width)}，实际 ${fmt(actual, got.width)}`,
+          expected: want,
+          actual,
+        });
+        break;
+      }
+      case "memoryEquals": {
+        const inst = findTarget(design, a.target);
+        if (!inst || (inst.type !== "ram" && inst.type !== "rom")) {
+          checks.push({ label: `存储 ${a.target}[${a.at}]`, pass: false, detail: "找不到该存储元件" });
+          break;
+        }
+        const mem = sim.readMemory(inst.id);
+        const actual = mem[a.at] ?? 0;
+        const want = num(a.equals);
+        checks.push({
+          label: `${a.target}[${a.at}]`,
+          pass: actual === want,
+          detail: `期望 ${want}，实际 ${actual}`,
+          expected: want,
+          actual,
+        });
+        break;
+      }
+      case "outputSequence": {
+        const inst = findTarget(design, a.target);
+        if (!inst) {
+          checks.push({ label: `输出序列 ${a.target}`, pass: false, detail: `找不到名为 ${a.target} 的元件` });
+          break;
+        }
+        const actual = inst.type === "print" ? printedValues(sim, inst.id) : compress(samples.get(a.target) ?? []);
+        const want = a.equals.map(num);
+        checks.push({
+          label: `输出序列 ${a.target}`,
+          pass: actual.length === want.length && actual.every((v, i) => v === want[i]),
+          detail: `期望 [${want.join(", ")}]，实际 [${actual.join(", ")}]`,
+          expected: want,
+          actual,
+        });
+        break;
+      }
+      case "halted": {
+        const inst =
+          findTarget(design, "done") ?? findTarget(design, "halt") ?? findTarget(design, "halted");
+        if (!inst) {
+          checks.push({ label: "halted", pass: false, detail: "找不到 DONE / HALT 信号" });
+          break;
+        }
+        const got = readComp(sim, inst);
+        checks.push({
+          label: "halted",
+          pass: !!got && got.value !== 0,
+          detail: got ? `${inst.name ?? inst.id} = ${got.value}` : `${inst.id} 没有可观测的输出脚`,
+          expected: 1,
+          actual: got?.value,
+        });
+        break;
+      }
+      case "noDiagnostic": {
+        const errs = sim.errors.filter((e) => e.level === "error");
+        checks.push({
+          label: "无诊断",
+          pass: errs.length === 0,
+          detail: errs.length ? errs.map((e) => e.msg).join("；") : "没有错误诊断",
+        });
+        break;
+      }
+    }
+  }
+
+  if (!checks.length) {
+    checks.push({ label: "用例", pass: false, detail: "用例没有任何断言，无法判定" });
+  }
+  return {
+    caseId: c.id,
+    pass: checks.every((k) => k.pass),
+    checks,
+    elapsedTicks: ran,
+    unsettled: sim.settleOutcome !== "converged",
+  };
 }

@@ -1,3 +1,4 @@
+import { Fnv1a32 } from "../core/hash.ts";
 import type { CustomDef } from "../core/types.ts";
 
 /* ------------------------------------------------------------------ *
@@ -59,24 +60,18 @@ function boundaryOf(def: CustomDef): { name: string; dir: "in" | "out"; width: n
 
 /** 计算 CustomDef 的内容哈希（FNV-1a 风格），用于检测修改 */
 export function hashComponent(def: CustomDef): string {
-  let h = 2166136261 >>> 0;
-  const mix = (s: string) => {
-    for (let i = 0; i < s.length; i++) {
-      h ^= s.charCodeAt(i);
-      h = Math.imul(h, 16777619) >>> 0;
-    }
-  };
-  mix(def.id);
+  const h = new Fnv1a32();
+  h.mixString(def.id);
   for (const c of def.circuit.comps ?? []) {
-    mix(`${c.id}:${c.type}:${JSON.stringify(c.params ?? {})}`);
+    h.mixString(`${c.id}:${c.type}:${JSON.stringify(c.params ?? {})}`);
   }
   for (const w of def.circuit.wires ?? []) {
-    mix(`${w.a.comp}.${w.a.pin}->${w.b.comp}.${w.b.pin}`);
+    h.mixString(`${w.a.comp}.${w.a.pin}->${w.b.comp}.${w.b.pin}`);
   }
   for (const sub of def.circuit.comps.filter((c) => c.type === "custom")) {
-    if (sub.params?.defId) mix(String(sub.params.defId));
+    if (sub.params?.defId) h.mixString(String(sub.params.defId));
   }
-  return h.toString(16).padStart(8, "0");
+  return h.hex();
 }
 
 export function addOrUpdate(state: WorkshopState, def: CustomDef, source: ComponentManifest["source"]): ComponentManifest {

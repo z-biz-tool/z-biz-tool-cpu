@@ -113,7 +113,7 @@ export default function Canvas() {
       downComp.current = { id: comp.id, type: comp.type };
       dragged.current = false;
       if (!st.selection.comps.includes(comp.id)) st.toggleSelect("comp", comp.id, e.shiftKey || e.metaKey || e.ctrlKey);
-      st.beginTransaction("移动");
+      if (comp.type === "button") st.pressButton(comp.id, true);
       mode.current = { kind: "drag", from: g };
       return;
     }
@@ -146,6 +146,8 @@ export default function Canvas() {
       if (dx || dy) {
         dragged.current = true;
         mode.current = { kind: "drag", from: { x: m.from.x + dx, y: m.from.y + dy } };
+        // 事务延迟到真正动了的这一刻：纯点击不留「移动」撤销记录，也不多跳修订
+        st.beginTransaction("移动");
         st.moveSelection(dx, dy);
       }
       return;
@@ -175,7 +177,8 @@ export default function Canvas() {
     if (m.kind === "drag") {
       st.endTransaction();
       const dc = downComp.current;
-      if (dc && !dragged.current && dc.type === "input") st.toggleInput(dc.id);
+      if (dc?.type === "button") st.pressButton(dc.id, false);
+      else if (dc && !dragged.current && dc.type === "input") st.toggleInput(dc.id);
     }
     if (m.kind === "marquee") selectRect(st, m.from, gridAt(e), m.add);
     downComp.current = null;
@@ -213,6 +216,9 @@ export default function Canvas() {
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerCancel={() => {
+          const dc = downComp.current;
+          if (dc?.type === "button") useEditor.getState().pressButton(dc.id, false);
+          downComp.current = null;
           mode.current = { kind: "idle" };
         }}
         onPointerLeave={() => {

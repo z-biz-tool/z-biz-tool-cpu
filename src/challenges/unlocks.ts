@@ -21,6 +21,7 @@ export const ALWAYS_UNLOCKED = new Set([
   "const",
   "note",
   "print",
+  "button",
 ]);
 
 /** 每关解锁的元件集合（关卡 id → 元件 type 列表） */
@@ -33,7 +34,7 @@ export const UNLOCKS: Record<string, string[]> = {
   //     于是它给用户报的是 **"通过 t1gates 解锁"** —— 一个用户根本找不到的关卡。
   // 同一个表被两个消费者按**不同口径**读（一个跳过不认识的，一个不跳过），
   // 差异就长成了界面上的一句错话。已删掉死条目。
-  "t1-gates": ["nand", "not", "and", "or", "xor", "xnor"],
+  "t1-gates": ["nand", "not", "and", "or", "nor", "xor", "xnor", "buf"],
   "t1-mux2": ["mux", "demux"],
   "t2-addsub": ["add", "sub"],
   "t2-cmp4": ["cmp"],
@@ -41,7 +42,7 @@ export const UNLOCKS: Record<string, string[]> = {
   "t2-alu4": ["alu"],
   "t3-reg4": ["reg"],
   "t3-count": ["counter"],
-  "t3-edge": ["dff"],
+  "t3-edge": ["dff", "dlatch"],
   "t3-ram": ["ram"],
   "t4-progmem": ["rom"],
   "t5-micro": ["tff"],

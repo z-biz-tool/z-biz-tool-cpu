@@ -12,6 +12,9 @@
  *  8. 理解勋章依据独立迁移/预测证据
  * ------------------------------------------------------------------ */
 
+import { Fnv1a32 } from "../core/hash.ts";
+import { runTestbenchCase } from "../challenges/verify.ts";
+import { totalCost } from "../core/custom.ts";
 import type { LevelDefinition, TestbenchCase } from "./manifest.ts";
 
 export interface RunContext {
@@ -54,27 +57,31 @@ export function stableSortCases(cases: TestbenchCase[]): TestbenchCase[] {
   return cases.slice().sort((a, b) => a.id.localeCompare(b.id));
 }
 
-/** 计算 cost：实际使用实例递归展开 */
+/** 计算 cost：与判题/编辑器同一口径（core/custom.ts 的 totalCost） */
 export function computeCost(design: import("../core/types.ts").Design): number {
-  const counted = new Set<string>();
-  function visit(d: import("../core/types.ts").Design): number {
-    let total = 0;
-    for (const c of d.root.comps ?? []) {
-      if (counted.has(c.id)) continue;
-      counted.add(c.id);
-      // 简化：每个基础元件 cost=1；custom 递归展开
-      total += 1;
-    }
-    return total;
-  }
-  return visit(design);
+  return totalCost(design, design.root);
 }
 
-/** 模拟一次用例执行；返回 outcome（不实际跑，校验逻辑） */
-export function runCase(_ctx: RunContext, c: TestbenchCase): CaseOutcome {
-  // 真实的 sim/runLevelTests 在 challenges/verify.ts 里；这里只暴露结构
-  const r: CaseOutcome = { caseId: c.id, pass: true, reason: "assert", elapsedTicks: 0 };
-  return r;
+/** 执行一个发布态用例：真跑仿真，失败原因按第一处失败归类 */
+export function runCase(ctx: RunContext, c: TestbenchCase): CaseOutcome {
+  const r = runTestbenchCase(ctx.design, c);
+  const failed = r.checks.find((k) => !k.pass);
+  const reason: CaseOutcome["reason"] = !failed
+    ? "assert"
+    : failed.label === "仿真" || r.unsettled
+      ? "resource"
+      : failed.detail.startsWith("找不到")
+        ? "error"
+        : "assert";
+  return {
+    caseId: c.id,
+    pass: r.pass,
+    reason,
+    firstFailure: failed
+      ? { tick: 0, expected: failed.expected, actual: failed.actual, signal: failed.label }
+      : undefined,
+    elapsedTicks: r.elapsedTicks,
+  };
 }
 
 /** 整合判题流水线：分阶段 + 隔离 + 证据 */
@@ -103,16 +110,10 @@ export function attemptId(ctx: RunContext): string {
 }
 
 function hashDesign(d: import("../core/types.ts").Design): number {
-  let h = 2166136261 >>> 0;
-  const mix = (s: string) => {
-    for (let i = 0; i < s.length; i++) {
-      h ^= s.charCodeAt(i);
-      h = Math.imul(h, 16777619) >>> 0;
-    }
-  };
-  for (const c of d.root.comps ?? []) mix(`${c.id}:${c.type}:${JSON.stringify(c.params ?? {})}`);
-  for (const w of d.root.wires ?? []) mix(`${w.a.comp}.${w.a.pin}->${w.b.comp}.${w.b.pin}`);
-  return h >>> 0;
+  const h = new Fnv1a32();
+  for (const c of d.root.comps ?? []) h.mixString(`${c.id}:${c.type}:${JSON.stringify(c.params ?? {})}`);
+  for (const w of d.root.wires ?? []) h.mixString(`${w.a.comp}.${w.a.pin}->${w.b.comp}.${w.b.pin}`);
+  return h.digest();
 }
 
 /** 写入 attempt + progress（同一事务；先功能通过、再工程、最后理解） */
