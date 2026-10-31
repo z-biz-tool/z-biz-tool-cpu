@@ -36,6 +36,8 @@ export default function Canvas() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const cursor = useRef<Point | null>(null);
   const mode = useRef<Mode>({ kind: "idle" });
+  const downComp = useRef<{ id: string; type: string } | null>(null);
+  const dragged = useRef(false);
 
   useEffect(() => {
     const wrap = wrapRef.current;
@@ -108,6 +110,8 @@ export default function Canvas() {
     }
     const comp = hitComp(scene, g);
     if (comp) {
+      downComp.current = { id: comp.id, type: comp.type };
+      dragged.current = false;
       if (!st.selection.comps.includes(comp.id)) st.toggleSelect("comp", comp.id, e.shiftKey || e.metaKey || e.ctrlKey);
       st.beginTransaction("移动");
       mode.current = { kind: "drag", from: g };
@@ -140,6 +144,7 @@ export default function Canvas() {
       const dx = Math.round(g.x - m.from.x);
       const dy = Math.round(g.y - m.from.y);
       if (dx || dy) {
+        dragged.current = true;
         mode.current = { kind: "drag", from: { x: m.from.x + dx, y: m.from.y + dy } };
         st.moveSelection(dx, dy);
       }
@@ -167,8 +172,13 @@ export default function Canvas() {
   const onPointerUp = (e: React.PointerEvent) => {
     const st = useEditor.getState();
     const m = mode.current;
-    if (m.kind === "drag") st.endTransaction();
+    if (m.kind === "drag") {
+      st.endTransaction();
+      const dc = downComp.current;
+      if (dc && !dragged.current && dc.type === "input") st.toggleInput(dc.id);
+    }
     if (m.kind === "marquee") selectRect(st, m.from, gridAt(e), m.add);
+    downComp.current = null;
     mode.current = { kind: "idle" };
   };
 
