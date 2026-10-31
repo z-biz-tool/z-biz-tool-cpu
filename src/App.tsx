@@ -1,4 +1,4 @@
-import { App as AntdApp, ConfigProvider, theme, message } from "antd";
+import { App as AntdApp, ConfigProvider, theme } from "antd";
 import zhCN from "antd/locale/zh_CN";
 import { Navigate, Route, Routes, useNavigate } from "react-router-dom";
 import { useEffect } from "react";
@@ -30,10 +30,57 @@ import ShelfPage from "./pages/ShelfPage.tsx";
 // [data-keys='local']
 
 export default function App() {
+  return (
+    <ConfigProvider
+      locale={zhCN}
+      theme={{
+        algorithm: theme.darkAlgorithm,
+        token: {
+          colorPrimary: "#a78bfa",
+          colorInfo: "#a78bfa",
+          colorBgBase: "#0b0d14",
+          colorBorder: "#2a3141",
+          colorText: "#e5e7eb",
+          borderRadius: 8,
+          fontSize: 13,
+          fontFamily:
+            "system-ui, -apple-system, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif",
+        },
+        components: {
+          Tabs: { horizontalItemPadding: "8px 10px" },
+          Table: { cellPaddingBlockSM: 3, cellPaddingInlineSM: 6 },
+        },
+      }}
+    >
+      <AntdApp component={false}>
+        {/* doc 02 §9：屏幕阅读器播报区必须挂在应用根部，子树增删不会丢基线 */}
+        <A11yAnnouncer />
+        {/* 深链接线放在 AntdApp 里面：message 要走 App.useApp()，
+            静态 message 会挂到全局 holder 上，不吃本页的暗色主题。 */}
+        <DeepLinkBridge />
+        {/* 课程页全局快捷键命中 [data-keys='local'] 的区域时必须让位 —— 见 GamePage 的键盘监听 */}
+        <Routes>
+          <Route path="/" element={<ShelfPage />} />
+          <Route path="/lesson" element={<GamePage />} />
+          <Route path="/sandbox" element={<GamePage />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </AntdApp>
+    </ConfigProvider>
+  );
+}
+
+/**
+ * zbiz:// 深链的收侧。
+ *
+ * 单独成组件是为了待在 `<AntdApp>` 里面 —— `message` 必须取自 `AntdApp.useApp()`。
+ * antd 的静态 `message.warning()` 把提示挂到**全局** holder 上，绕过了本页
+ * ConfigProvider 的暗色主题，报错提示会是默认的浅色样式，浮在一片深色界面上。
+ */
+function DeepLinkBridge() {
+  const { message } = AntdApp.useApp();
   const navigate = useNavigate();
 
-  // ── zbiz:// 深链接线（2026-10-31 接入共享层）──
-  //
   // 别的产品用 `zbiz://cpu/open?level=t2-alu4&book=logic&panel=asm` 唤起本应用时，
   // Rust 把深链收进队列并 emit("zbiz-open")。
   //
@@ -78,41 +125,7 @@ export default function App() {
       log: (msg, item) => console.debug("[cpu] 深链", msg, item),
     });
     return stop;
-  }, [navigate]);
+  }, [navigate, message]);
 
-  return (
-    <ConfigProvider
-      locale={zhCN}
-      theme={{
-        algorithm: theme.darkAlgorithm,
-        token: {
-          colorPrimary: "#a78bfa",
-          colorInfo: "#a78bfa",
-          colorBgBase: "#0b0d14",
-          colorBorder: "#2a3141",
-          colorText: "#e5e7eb",
-          borderRadius: 8,
-          fontSize: 13,
-          fontFamily:
-            "system-ui, -apple-system, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif",
-        },
-        components: {
-          Tabs: { horizontalItemPadding: "8px 10px" },
-          Table: { cellPaddingBlockSM: 3, cellPaddingInlineSM: 6 },
-        },
-      }}
-    >
-      <AntdApp component={false}>
-        {/* doc 02 §9：屏幕阅读器播报区必须挂在应用根部，子树增删不会丢基线 */}
-        <A11yAnnouncer />
-        {/* 课程页全局快捷键命中 [data-keys='local'] 的区域时必须让位 —— 见 GamePage 的键盘监听 */}
-        <Routes>
-          <Route path="/" element={<ShelfPage />} />
-          <Route path="/lesson" element={<GamePage />} />
-          <Route path="/sandbox" element={<GamePage />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-      </AntdApp>
-    </ConfigProvider>
-  );
+  return null;
 }
