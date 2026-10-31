@@ -2620,10 +2620,37 @@ ok:
     const hits = (re: RegExp) =>
       files.filter((p) => re.test(code(p))).map((p) => p.replace(root + "/", "")).join(",");
     check("GATE: 界面里没有原生 alert / prompt / confirm", !hits(/\bwindow\.(alert|prompt|confirm)\s*\(/), hits(/\bwindow\.(alert|prompt|confirm)\s*\(/));
+    /* 「静态方法」和「context 版」是两回事，不能一把正则拍死：
+     *   message.warning() 若 message 来自 App.useApp() 的解构，它是 context 版，
+     *   吃本页 ConfigProvider 的暗色主题与 zh_CN 文案 —— 正是我们要求的写法；
+     *   只有当 message/notification/Modal 是 antd 的**静态导入**（挂在全局 holder
+     *   上、绕过 ConfigProvider）时才是违规。
+     * 所以逐标识符判定来源：从 useApp() 解构出来的 → 放行。 */
+    const boundByUseApp = (c: string) => {
+      const names = new Set<string>();
+      for (const m of c.matchAll(/(?:const|let|var)\s*\{([^}]*)\}\s*=\s*[\w.]*useApp\(\)/g)) {
+        for (const part of m[1].split(",")) {
+          const id = part.trim().split(/[:=]/)[0].trim();
+          if (id) names.add(id);
+        }
+      }
+      return names;
+    };
+    const staticViolation = (p: string) => {
+      const c = code(p);
+      const bound = boundByUseApp(c);
+      const re = /\b(Modal|notification|message)\.([A-Za-z_$][\w$]*)\s*\(/g;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(c))) {
+        if (!bound.has(m[1])) return m[0];
+      }
+      return "";
+    };
+    const staticHits = files.map((p) => [p, staticViolation(p)] as const).filter(([, v]) => v);
     check(
       "GATE: 确认框与通知走 context 版，不用 antd 静态方法",
-      !hits(/\bModal\.(confirm|info|success|warning|error)\s*\(|\bnotification\.[a-z]+\s*\(|\bmessage\.(open|info|success|warning|error)\s*\(/),
-      hits(/\bModal\.(confirm|info|success|warning|error)\s*\(|\bnotification\.[a-z]+\s*\(|\bmessage\.(open|info|success|warning|error)\s*\(/)
+      staticHits.length === 0,
+      staticHits.map(([p, v]) => `${p.replace(root + "/", "")}: ${v}`).join(", ")
     );
     const app = code(root + "/App.tsx");
     const palette = code(root + "/editor/Palette.tsx");
