@@ -60,7 +60,9 @@ export function projectLevel(
     publicTests,
     validationCases,
     hints,
-    rubric: { pass: { requiredCases: validationCases.map((t) => t.id) } },
+    // 必过用例取公开用例：它们是关卡「做对」的判据，与开发态 Level.tests 同源；
+    // 验证用例是变式，用来额外考迁移，挂在通关判据上会把关卡卡死。
+    rubric: { pass: { requiredCases: (publicTests.length ? publicTests : validationCases).map((t) => t.id) } },
   };
 }
 

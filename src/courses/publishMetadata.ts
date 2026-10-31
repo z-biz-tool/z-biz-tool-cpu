@@ -126,7 +126,7 @@ function publishFor(
   displayOrder: number,
   prereqs: string[],
   pins: TaskInterface["pins"],
-  options: { notes?: Partial<TaskInterface>; cases?: TestbenchCase[]; hints?: HintStep[] } = {},
+  options: { notes?: Partial<TaskInterface>; cases?: TestbenchCase[]; validation?: TestbenchCase[]; hints?: HintStep[] } = {},
 ): LevelPublishMeta {
   return {
     displayOrder,
@@ -134,7 +134,8 @@ function publishFor(
     objectives: [{ knowledgeId: id, description: id }],
     interfaceContract: iface(pins, options.notes ?? {}),
     publicTests: options.cases ?? [],
-    validationCases: options.cases ?? [],
+    // 变式验证用例：默认没有单独写过，就与公开用例同源；有独立变式时用 validation 传。
+    validationCases: options.validation ?? options.cases ?? [],
     hints: options.hints ?? [
       HINT(1, "先识别每个输入/输出端口和它的位宽。"),
       HINT(2, "用真值表枚举所有输入组合，标出每一项的预期输出。"),
@@ -169,7 +170,12 @@ const reg4Hints: HintStep[] = [
 const reg4Cases: TestbenchCase[] = [
   caseBasic("reg-load0", "LOAD=0 初值下 4 周期 Q 仍 0", [{ target: "load", tick: 0, value: 0 }, { target: "d", tick: 0, value: 5 }], [EQ("q", 0)], 8),
   caseBasic("reg-rise", "LOAD=1 上升沿 Q=D", [{ target: "load", tick: 0, value: 1 }, { target: "d", tick: 0, value: 5 }], [EQ("q", 5)], 4),
-  caseBasic("reg-hold", "CLK 保持高 D 变不更新", [{ target: "load", tick: 0, value: 1 }, { target: "d", tick: 0, value: 9 }], [EQ("q", 5)], 6),
+  caseBasic("reg-hold", "LOAD 关闭后 D 变，Q 保持旧值", [
+    { target: "load", tick: 0, value: 1 },
+    { target: "d", tick: 0, value: 5 },
+    { target: "load", tick: 1, value: 0 },
+    { target: "d", tick: 1, value: 9 },
+  ], [EQ("q", 5)], 6),
 ];
 
 /* doc 03 §6.3 t2-alu4 世界 Boss 样例 */
@@ -195,7 +201,7 @@ const machineHints: HintStep[] = [
 ];
 const machineCases: TestbenchCase[] = [
   caseBasic("machine-count", "count 程序打印 1..10", [], [{ kind: "outputSequence", target: "out", equals: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] }], 500),
-  caseBasic("machine-sum", "sum 程序打印 5050", [], [{ kind: "outputSequence", target: "out", equals: [5050] }], 2000),
+  caseBasic("machine-sum", "把 MEM 换成 sum 程序后打印 5050", [], [{ kind: "outputSequence", target: "out", equals: [5050] }], 2000),
   caseBasic("machine-halt", "完成后 DONE=1", [], [{ kind: "halted" }], 4000),
 ];
 
@@ -207,9 +213,16 @@ const enc4Hints: HintStep[] = [
   HINT(4, "用减法或大小比较逐位选赢家；先定 D3 是否有效。"),
 ];
 const enc4Cases: TestbenchCase[] = [
-  caseBasic("enc-0000", "0000 → Y=0 V=0", [{ target: "i", tick: 0, value: 0 }], [EQ("y", 0), EQ("v", 0)], 2),
-  caseBasic("enc-0001", "0001 → Y=0 V=1", [{ target: "i", tick: 0, value: 1 }], [EQ("y", 0), EQ("v", 1)], 2),
-  caseBasic("enc-1011", "1011 → Y=3 V=1", [{ target: "i", tick: 0, value: 11 }], [EQ("y", 3), EQ("v", 1)], 2),
+  caseBasic("enc-none", "全 0 → Y=0 V=0", [
+    { target: "d0", tick: 0, value: 0 },
+    { target: "d1", tick: 0, value: 0 },
+    { target: "d2", tick: 0, value: 0 },
+    { target: "d3", tick: 0, value: 0 },
+  ], [EQ("y", 0), EQ("v", 0)], 2),
+  caseBasic("enc-d0", "D0=1 → Y=0 V=1", [{ target: "d0", tick: 0, value: 1 }], [EQ("y", 0), EQ("v", 1)], 2),
+  caseBasic("enc-d1", "D1=1 D0=1 → Y=1 V=1", [{ target: "d1", tick: 0, value: 1 }, { target: "d0", tick: 0, value: 1 }], [EQ("y", 1), EQ("v", 1)], 2),
+  caseBasic("enc-d2", "D2=1 → Y=2 V=1", [{ target: "d2", tick: 0, value: 1 }], [EQ("y", 2), EQ("v", 1)], 2),
+  caseBasic("enc-d3", "D3=1 D1=1 → Y=3 V=1", [{ target: "d3", tick: 0, value: 1 }, { target: "d1", tick: 0, value: 1 }], [EQ("y", 3), EQ("v", 1)], 2),
 ];
 
 const stackHints: HintStep[] = [
@@ -219,8 +232,18 @@ const stackHints: HintStep[] = [
   HINT(4, "把 push/pop 当两个独立动作画时序图；满 / 空边界单独跑一遍。"),
 ];
 const stackCases: TestbenchCase[] = [
-  caseBasic("stack-push5", "PUSH 5 → 写入 MEM[SP]", [{ target: "d", tick: 0, value: 5 }, { target: "push", tick: 0, value: 1 }], [], 4),
-  caseBasic("stack-pop3", "POP 后 SP=1, Q=3", [], [EQ("q", 3)], 8),
+  caseBasic("stack-push5", "OP=1 入栈 5 → MEM[0]=5、SP=1", [
+    { target: "op", tick: 0, value: 1 },
+    { target: "din", tick: 0, value: 5 },
+    { target: "op", tick: 1, value: 0 },
+  ], [{ kind: "memoryEquals", target: "stack", at: 0, equals: 5 }, EQ("sp", 1)], 4),
+  caseBasic("stack-pop3", "入栈 5、入栈 3、OP=2 出栈 → TOS=3", [
+    { target: "op", tick: 0, value: 1 },
+    { target: "din", tick: 0, value: 5 },
+    { target: "din", tick: 1, value: 3 },
+    { target: "op", tick: 2, value: 2 },
+    { target: "op", tick: 3, value: 0 },
+  ], [EQ("tos", 3)], 8),
 ];
 
 const harvardHints: HintStep[] = [
@@ -230,18 +253,21 @@ const harvardHints: HintStep[] = [
   HINT(4, "先接通地址计数到 SUM，再把 DONE 反馈给 RUN；保护未写存储需要片选。"),
 ];
 const harvardCases: TestbenchCase[] = [
-  caseBasic("harvard-sum", "完整运行 SUM=108 DONE=1", [{ target: "run", tick: 0, value: 1 }], [EQ("sum", 108), EQ("done", 1)], 800),
+  caseBasic("harvard-sum", "取满 8 项：SUM=108 DONE=1", [
+    { target: "run", tick: 0, value: 1 },
+    { target: "run", tick: 8, value: 0 },
+  ], [EQ("sum", 108), EQ("done", 1)], 12),
 ];
 
 export const PROLOGUE_META: LevelPublishMeta[] = [prologueLight, prologueWire, prologueClock];
 
 export const LEVEL_META: LevelPublishMeta[] = [
-  publishFor("t1-gates", 1, ["signal-direct"], [PIN("a", "A", "in", 1), PIN("b", "B", "in", 1), PIN("out", "OUT", "out", 1)], {
+  publishFor("t1-gates", 1, ["signal-direct"], [PIN("in-A", "A", "in", 1), PIN("in-B", "B", "in", 1), PIN("out-NA", "NA", "out", 1), PIN("out-AB", "AB", "out", 1), PIN("out-OR", "OR", "out", 1)], {
     cases: [
-      caseBasic("g-00", "00 → 1", [{ target: "a", tick: 0, value: 0 }, { target: "b", tick: 0, value: 0 }], [EQ("out", 1)], 2),
-      caseBasic("g-01", "01 → 1", [{ target: "a", tick: 0, value: 0 }, { target: "b", tick: 0, value: 1 }], [EQ("out", 1)], 2),
-      caseBasic("g-10", "10 → 1", [{ target: "a", tick: 0, value: 1 }, { target: "b", tick: 0, value: 0 }], [EQ("out", 1)], 2),
-      caseBasic("g-11", "11 → 0", [{ target: "a", tick: 0, value: 1 }, { target: "b", tick: 0, value: 1 }], [EQ("out", 0)], 2),
+      caseBasic("g-00", "00 → NA=1 AB=0 OR=0", [{ target: "a", tick: 0, value: 0 }, { target: "b", tick: 0, value: 0 }], [EQ("na", 1), EQ("ab", 0), EQ("or", 0)], 2),
+      caseBasic("g-01", "01 → NA=1 AB=0 OR=1", [{ target: "a", tick: 0, value: 0 }, { target: "b", tick: 0, value: 1 }], [EQ("na", 1), EQ("ab", 0), EQ("or", 1)], 2),
+      caseBasic("g-10", "10 → NA=0 AB=0 OR=1", [{ target: "a", tick: 0, value: 1 }, { target: "b", tick: 0, value: 0 }], [EQ("na", 0), EQ("ab", 0), EQ("or", 1)], 2),
+      caseBasic("g-11", "11 → NA=0 AB=1 OR=1", [{ target: "a", tick: 0, value: 1 }, { target: "b", tick: 0, value: 1 }], [EQ("na", 0), EQ("ab", 1), EQ("or", 1)], 2),
     ],
     hints: [
       HINT(1, "NAND 是通用门：先看 00→1, 11→0 这两个组合的差异。"),
@@ -250,12 +276,12 @@ export const LEVEL_META: LevelPublishMeta[] = [
       HINT(4, "NA = NAND(A,A)；再用一次 NAND 把 A、B 各自取反的结果合并。"),
     ],
   }),
-  publishFor("t1-xor", 2, ["t1-gates"], [PIN("a", "A", "in", 1), PIN("b", "B", "in", 1), PIN("out", "OUT", "out", 1)], {
+  publishFor("t1-xor", 2, ["t1-gates"], [PIN("in-A", "A", "in", 1), PIN("in-B", "B", "in", 1), PIN("out-X", "X", "out", 1)], {
     cases: [
-      caseBasic("x-00", "00 → 0", [{ target: "a", tick: 0, value: 0 }, { target: "b", tick: 0, value: 0 }], [EQ("out", 0)], 2),
-      caseBasic("x-01", "01 → 1", [{ target: "a", tick: 0, value: 0 }, { target: "b", tick: 0, value: 1 }], [EQ("out", 1)], 2),
-      caseBasic("x-10", "10 → 1", [{ target: "a", tick: 0, value: 1 }, { target: "b", tick: 0, value: 0 }], [EQ("out", 1)], 2),
-      caseBasic("x-11", "11 → 0", [{ target: "a", tick: 0, value: 1 }, { target: "b", tick: 0, value: 1 }], [EQ("out", 0)], 2),
+      caseBasic("x-00", "00 → 0", [{ target: "a", tick: 0, value: 0 }, { target: "b", tick: 0, value: 0 }], [EQ("x", 0)], 2),
+      caseBasic("x-01", "01 → 1", [{ target: "a", tick: 0, value: 0 }, { target: "b", tick: 0, value: 1 }], [EQ("x", 1)], 2),
+      caseBasic("x-10", "10 → 1", [{ target: "a", tick: 0, value: 1 }, { target: "b", tick: 0, value: 0 }], [EQ("x", 1)], 2),
+      caseBasic("x-11", "11 → 0", [{ target: "a", tick: 0, value: 1 }, { target: "b", tick: 0, value: 1 }], [EQ("x", 0)], 2),
     ],
     hints: [
       HINT(1, "异或 = 「不同为真」；对比 OR 的反例。"),
@@ -292,7 +318,7 @@ export const LEVEL_META: LevelPublishMeta[] = [
       HINT(4, "每位用 AND 门：Y[k] = NOT(I[k]) 或对应 NOT 组合。"),
     ],
   }),
-  publishFor("t1-enc4", 7, ["t1-dec24"], [PIN("i", "I", "in", 4), PIN("y", "Y", "out", 2), PIN("v", "V", "out", 1)], {
+  publishFor("t1-enc4", 7, ["t1-dec24"], [PIN("in-D0", "D0", "in", 1), PIN("in-D1", "D1", "in", 1), PIN("in-D2", "D2", "in", 1), PIN("in-D3", "D3", "in", 1), PIN("out-Y", "Y", "out", 2), PIN("out-V", "V", "out", 1)], {
     cases: enc4Cases,
     hints: enc4Hints,
   }),
@@ -400,7 +426,7 @@ export const LEVEL_META: LevelPublishMeta[] = [
       HINT(4, "WA 由 wen&clk 写入；QA = mem[RA]、QB = mem[RB] 同时组合读出。"),
     ],
   }),
-  publishFor("t3-stack", 8, ["t3-ram"], [PIN("clk", "CLK", "in", 1), PIN("d", "D", "in", 8), PIN("push", "PUSH", "in", 1), PIN("pop", "POP", "in", 1), PIN("q", "Q", "out", 8)], {
+  publishFor("t3-stack", 8, ["t3-ram"], [PIN("clk", "CLK", "in", 1), PIN("in-DIN", "DIN", "in", 8), PIN("in-OP", "OP", "in", 2), PIN("out-TOS", "TOS", "out", 8)], {
     cases: stackCases,
     hints: stackHints,
   }),
@@ -436,8 +462,9 @@ export const LEVEL_META: LevelPublishMeta[] = [
       HINT(4, "装载时 WEN=1，地址按 base+i 顺序写；运行时只读。"),
     ],
   }),
-  publishFor("t4-machine", 5, ["t4-alu8", "t4-instdec", "t4-pc", "t4-progmem"], [PIN("clk", "CLK", "in", 1), PIN("mem", "MEM", "in", 16, false), PIN("out", "OUT", "in", 16, false), PIN("done", "DONE", "out", 1)], {
-    cases: machineCases,
+  publishFor("t4-machine", 5, ["t4-alu8", "t4-instdec", "t4-pc", "t4-progmem"], [PIN("clk", "CLK", "in", 1), PIN("out-DONE", "DONE", "out", 1)], {
+    cases: [machineCases[0], machineCases[2]],
+    validation: [machineCases[1]],
     hints: machineHints,
     notes: { cpuObservation: { pcRef: "pc", irRef: "ir", memInstancePath: ["MEM"] } },
   }),
@@ -465,7 +492,7 @@ export const LEVEL_META: LevelPublishMeta[] = [
       HINT(4, "高 3 位 ST、中 3 位 SUB、低 4 位 OP；地址共 10 位。"),
     ],
   }),
-  publishFor("t5-harvard", 4, ["t4-machine", "t5-bank"], [PIN("clk", "CLK", "in", 1), PIN("run", "RUN", "in", 1), PIN("sum", "SUM", "out", 16), PIN("done", "DONE", "out", 1)], {
+  publishFor("t5-harvard", 4, ["t4-machine", "t5-bank"], [PIN("clk", "CLK", "in", 1), PIN("in-RUN", "RUN", "in", 1), PIN("out-SUM", "SUM", "out", 8), PIN("out-DONE", "DONE", "out", 1)], {
     cases: harvardCases,
     hints: harvardHints,
   }),
