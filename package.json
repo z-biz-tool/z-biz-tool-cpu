@@ -29,7 +29,7 @@
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-router-dom": "^7.18.4",
-    "z-biz-tool-shared": "^0.1.6",
+    "z-biz-tool-shared": "^0.1.16",
     "zustand": "^5.0.0"
   },
   "devDependencies": {

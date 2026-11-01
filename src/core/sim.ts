@@ -1,4 +1,4 @@
-import { Fnv1a32 } from "./hash.ts";
+import { fnv1a32 } from "z-biz-tool-shared/hash";
 import { buildNetlist, pinWidthOf, type Netlist, type SimComp, type SimNet } from "./netlist.ts";
 import { parseWordToken } from "./registry.ts";
 import type { Circuit, Design, EvalCtx, PinRef } from "./types.ts";
@@ -590,23 +590,28 @@ export class Simulator {
     }
   }
 
-  /** IMP-04: 取所有网络值与已命名器件状态哈希，用于检测周期 */
+  /** IMP-04: 取所有网络值与已命名器件状态哈希，用于检测周期。
+   * 数值按 4 字节小端进 FNV（shared/hash 同源）；只在会话内比较，不落盘。 */
   hashState(): number {
-    const h = new Fnv1a32();
+    const parts: number[] = [];
+    const push32 = (v: number) => {
+      const u = v | 0;
+      parts.push(u & 0xff, (u >>> 8) & 0xff, (u >>> 16) & 0xff, (u >>> 24) & 0xff);
+    };
     const nets = this.nl.nets;
     for (let i = 0; i < nets.length; i++) {
-      h.mix(nets[i].value | 0);
+      push32(nets[i].value | 0);
     }
     for (const c of this.nl.comps) {
       if (c.boundary) continue;
       for (const k of Object.keys(c.state)) {
         const v = c.state[k];
         if (typeof v === "number") {
-          h.mix(v + k.charCodeAt(0));
+          push32(v + k.charCodeAt(0));
         }
       }
     }
-    return h.digest();
+    return fnv1a32(new Uint8Array(parts));
   }
 
   private clkValue(ci: number): number {

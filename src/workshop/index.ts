@@ -1,4 +1,4 @@
-import { Fnv1a32 } from "../core/hash.ts";
+import { fnv1a32StrHex } from "z-biz-tool-shared/hash";
 import type { CustomDef } from "../core/types.ts";
 
 /* ------------------------------------------------------------------ *
@@ -58,20 +58,20 @@ function boundaryOf(def: CustomDef): { name: string; dir: "in" | "out"; width: n
   }));
 }
 
-/** 计算 CustomDef 的内容哈希（FNV-1a 风格），用于检测修改 */
+/** 计算 CustomDef 的内容哈希（FNV-1a 32 位，shared/hash 同源、Rust cap-hash 金标），用于检测修改 */
 export function hashComponent(def: CustomDef): string {
-  const h = new Fnv1a32();
-  h.mixString(def.id);
+  // 逐段 mixString ≡ 整串混入；现在直接拼整串走 shared 的 UTF-8 字节口径
+  let text = def.id;
   for (const c of def.circuit.comps ?? []) {
-    h.mixString(`${c.id}:${c.type}:${JSON.stringify(c.params ?? {})}`);
+    text += `${c.id}:${c.type}:${JSON.stringify(c.params ?? {})}`;
   }
   for (const w of def.circuit.wires ?? []) {
-    h.mixString(`${w.a.comp}.${w.a.pin}->${w.b.comp}.${w.b.pin}`);
+    text += `${w.a.comp}.${w.a.pin}->${w.b.comp}.${w.b.pin}`;
   }
   for (const sub of def.circuit.comps.filter((c) => c.type === "custom")) {
-    if (sub.params?.defId) h.mixString(String(sub.params.defId));
+    if (sub.params?.defId) text += String(sub.params.defId);
   }
-  return h.hex();
+  return fnv1a32StrHex(text);
 }
 
 export function addOrUpdate(state: WorkshopState, def: CustomDef, source: ComponentManifest["source"]): ComponentManifest {

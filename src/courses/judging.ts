@@ -12,7 +12,7 @@
  *  8. 理解勋章依据独立迁移/预测证据
  * ------------------------------------------------------------------ */
 
-import { Fnv1a32 } from "../core/hash.ts";
+import { fnv1a32Str } from "z-biz-tool-shared/hash";
 import { runTestbenchCase } from "../challenges/verify.ts";
 import { totalCost } from "../core/custom.ts";
 import type { LevelDefinition, TestbenchCase } from "./manifest.ts";
@@ -110,10 +110,11 @@ export function attemptId(ctx: RunContext): string {
 }
 
 function hashDesign(d: import("../core/types.ts").Design): number {
-  const h = new Fnv1a32();
-  for (const c of d.root.comps ?? []) h.mixString(`${c.id}:${c.type}:${JSON.stringify(c.params ?? {})}`);
-  for (const w of d.root.wires ?? []) h.mixString(`${w.a.comp}.${w.a.pin}->${w.b.comp}.${w.b.pin}`);
-  return h.digest();
+  // 逐段 mixString ≡ 整串混入；现在直接拼整串走 shared 的 UTF-8 字节口径
+  let text = "";
+  for (const c of d.root.comps ?? []) text += `${c.id}:${c.type}:${JSON.stringify(c.params ?? {})}`;
+  for (const w of d.root.wires ?? []) text += `${w.a.comp}.${w.a.pin}->${w.b.comp}.${w.b.pin}`;
+  return fnv1a32Str(text);
 }
 
 /** 写入 attempt + progress（同一事务；先功能通过、再工程、最后理解） */

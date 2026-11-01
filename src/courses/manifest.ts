@@ -10,7 +10,7 @@
  *  - 不通过的门禁返回 ValidationResult，不输出半残 catalog
  * ------------------------------------------------------------------ */
 
-import { fnv1a32 } from "../core/hash.ts";
+import { fnv1a32StrHex } from "z-biz-tool-shared/hash";
 import type { Circuit, Design } from "../core/types.ts";
 
 /** 资源指针（指向仓库内固定 id） */
@@ -206,10 +206,10 @@ export function validateCatalog(m: LevelManifest): CatalogValidation {
   return { ok: issues.length === 0, issues };
 }
 
-/** 简易内容哈希（FNV-1a 32-bit）；用作一致性校验，不等同可信签名 */
+/** 简易内容哈希（FNV-1a 32 位，shared/hash 同源、Rust cap-hash 金标）；用作一致性校验，不等同可信签名 */
 export function catalogHash(m: LevelManifest): string {
   const text = JSON.stringify({ id: m.catalogId, levels: m.levels.map((l) => l.id), prologues: m.prologues.map((p) => p.id) });
-  return fnv1a32(text).toString(16);
+  return fnv1a32StrHex(text);
 }
 
 /** 草稿类型：buildCatalog 在内部把现有 LEVELS 投影为 LevelDefinition */
