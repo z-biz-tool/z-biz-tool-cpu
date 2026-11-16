@@ -1,23 +1,23 @@
 {
-  "version": "0.2.1",
+  "version": "0.2.2",
   "notes": "See the assets below to download this version.",
-  "pub_date": "2026-10-28T17:31:37Z",
+  "pub_date": "2026-11-16T01:39:20Z",
   "platforms": {
     "darwin-aarch64": {
-      "url": "https://github.com/z-biz-tool/z-biz-tool-cpu/releases/download/v0.2.1/z-biz-tool-cpu_aarch64.app.tar.gz",
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSdXNzZDVpbWtnK2VJZmt5TmJPeDdxSjN2NXp0Y0I2TllPRENnZEMwL3NaNWhjL0JaYzRoYWFnSEFuU2xQaTcvczYwUEdBUlQ1b1VUcXluOTFKMFhQUGpyblgvUVZxY3dvPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzMjA4NjU3CWZpbGU6ei1iaXotdG9vbC1jcHUuYXBwLnRhci5negl2ZXJzaW9uOjAuMi4xCjA4Ny9UWlBua1Y1QXBEN251QlpVc3p2NHJ0aXZ3dVV4THYyc2oyV3NubVoyQ042aTArTTVyVWVYamwvKzB4SXJKcjl0Q1hoN0xzNEdYV0xCK3FKWEFRPT0K"
+      "url": "https://github.com/z-biz-tool/z-biz-tool-cpu/releases/download/v0.2.2/z-biz-tool-cpu_aarch64.app.tar.gz",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSdXNzZDVpbWtnK1p3Rzh0cWU4NUhTRldNekkwWHhNYXZvUElKREl1ZjhKcmN0K09qVjVHQ255ck5DbDdnTW1BZVpaY0pvZi9SRTZ5SnlhNGJBLzc3NDQ3RVVBa3E5b1EwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NzkzMDMyCWZpbGU6ei1iaXotdG9vbC1jcHUuYXBwLnRhci5negl2ZXJzaW9uOjAuMi4yCmRCQVNOMnVsQmlaZ3NBVlNlM3pPK2JtckFMZGU3S0hxYk01YWNFV2hJcGptRW5oWjAvZHJLS01kT0NuZjBoK1dpYXhvVnc0TmQ1cndrbzI2RTZBUEJBPT0K"
     },
     "darwin-x86_64": {
-      "url": "https://github.com/z-biz-tool/z-biz-tool-cpu/releases/download/v0.2.1/z-biz-tool-cpu_x64.app.tar.gz",
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSdXNzZDVpbWtnK2M3elhuUUVLd21hdjFoaUFydFRNYzhHZXNzOERSdkRvdG5hSk9SNHB6R3VwaVNvZWhxWlo5YVoyVkpJNWpjMGtXUVdOMHk0dlVqNnNIazk4Tyt1NEFVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzMjA3NDEwCWZpbGU6ei1iaXotdG9vbC1jcHUuYXBwLnRhci5negl2ZXJzaW9uOjAuMi4xCkMzT3ZTWWtEVlFBMEZ4NHBQQVBsVUVCUW5jNTVlOEIvZHVsbWNRUjRqYW5vN0lQZFhYeUQvUnVGU09YRFRuR1EzQXZWSC80cHcydU45ZWpmckpvdENnPT0K"
+      "url": "https://github.com/z-biz-tool/z-biz-tool-cpu/releases/download/v0.2.2/z-biz-tool-cpu_x64.app.tar.gz",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSdXNzZDVpbWtnK2JYYnVONjBsWGFaL0JWSFgwc0pDbjJHaFdUTmdlenJUTTZGY1ZQTE1qb2p5UDYxdWVGQTNpdmtURXFsVXZJVm5uZ1dNd2gvQlZHS29QTkkzbDNLNndJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NzkzMDE2CWZpbGU6ei1iaXotdG9vbC1jcHUuYXBwLnRhci5negl2ZXJzaW9uOjAuMi4yCnBNYTE5aGsraTR3WC80ckRlTkEwanFidkZyeEl6UjFTQVNqZlZMaXRXcmtxdHMrSjdtVVU4WmFDWGFIS1pNdk1ueWxZZnJ0dzBOdzQrSkVmUGxmaUF3PT0K"
     },
     "linux-x86_64": {
-      "url": "https://github.com/z-biz-tool/z-biz-tool-cpu/releases/download/v0.2.1/z-biz-tool-cpu_0.2.1_amd64.AppImage",
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSdXNzZDVpbWtnK2JvY0NWc3V1NldpMUhuUDJRL05qQmZuSXZsdDU2ajdZcmJobGhHcW4rdzArUnBGZHN0Z05RTjg1Wm4wNHRjcDFDaS9nK1pkUCs2bGlFUy83QnlJa0FNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzMjA2NzU3CWZpbGU6ei1iaXotdG9vbC1jcHVfMC4yLjFfYW1kNjQuQXBwSW1hZ2UJdmVyc2lvbjowLjIuMQpwR3VyM1VHL1QreUFYbjh6SlNsbEpnV0JnUFd2SU5CWlB1VkU4UDFUVzhKVkdjOE4xZC9JakRMWEQzTWQySEpETEhwWDVBUU82QWc4UmNWbTdVSmNBdz09Cg=="
+      "url": "https://github.com/z-biz-tool/z-biz-tool-cpu/releases/download/v0.2.2/z-biz-tool-cpu_0.2.2_amd64.AppImage",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSdXNzZDVpbWtnK1hLK2VSbUNzalJrbXlLdDErZkVlYW1jUS9jdDBrWXVheTlGc1hMQ21ON2VDSHo0SU03WmlhTzEvdkgwY1pXR1oxVW5IZE5pdTVKdVczV0VQcklINVEwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NzkzMTM0CWZpbGU6ei1iaXotdG9vbC1jcHVfMC4yLjJfYW1kNjQuQXBwSW1hZ2UJdmVyc2lvbjowLjIuMgpabEVLbmRMRVNOT0dUU0l1NVFPYTdJOVA4QXhmSkQ1UGRwdXNvL2YzWHBGMjVOWHJnNVdwS0xUNFpWZkNGNXgrSHUyM0pYeFRoVkp4MHh1dTNpUmNCQT09Cg=="
     },
     "windows-x86_64": {
-      "url": "https://github.com/z-biz-tool/z-biz-tool-cpu/releases/download/v0.2.1/z-biz-tool-cpu_0.2.1_x64_en-US.msi",
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSdXNzZDVpbWtnK1huLytLTXovL0cvOVNvcVl6QlgxV3pINC9LUlZLb05sYjhRWW5LeEk0aVRCRE1CalZCbllXR2tUcUk3V0hxSWVkYWxiZVlvTkZIS2xJVzR6a241d1FBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzMjA2NzUwCWZpbGU6ei1iaXotdG9vbC1jcHVfMC4yLjFfeDY0X2VuLVVTLm1zaQl2ZXJzaW9uOjAuMi4xCmUzVEFSWGhUYWpvK1FQbkRFcy9lN3F1Wm5KTnpqVHBTTjkxNnc2VTdwb1JPR3JwbmpEUFU0OTBzRFhEYVVBcFFtTkM3RFBHS2YzanFKSjJnb3oyT0JRPT0K"
+      "url": "https://github.com/z-biz-tool/z-biz-tool-cpu/releases/download/v0.2.2/z-biz-tool-cpu_0.2.2_x64_en-US.msi",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSdXNzZDVpbWtnK2NSWGJUWjJvSzNJZDA3QjlnV0R2RXN5MGJUQnYxY3Bwb0oyckJMbEJjMGxBcmlldUxETEZRNStFVjl0amRsanFtQysyQ0Y2ZjU3K1JTQnYrR3hrSXc0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NzkyOTc5CWZpbGU6ei1iaXotdG9vbC1jcHVfMC4yLjJfeDY0X2VuLVVTLm1zaQl2ZXJzaW9uOjAuMi4yCkxpcXFVRXRZcW5OV2RqRkxERVZYMnVMMzExSXpQa05HSlY3SW5tYlZwSDBQUzZsZ0MrN3g1V3dxNXhHU0RhRUFmUGM4aFY3VDdTS3lpSWNNeWs0V0F3PT0K"
     }
   }
 }
